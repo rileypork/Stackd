@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { STATUSES, isStatus, type Status } from "./api/apps/payload";
 
-type Status = "Active" | "Trialing" | "Saved" | "Inactive" | "Needs Review";
+type SortKey = "Recently updated" | "Cost high to low" | "Alphabetical" | "Trial expiration";
+const sortKeys: SortKey[] = ["Recently updated", "Cost high to low", "Alphabetical", "Trial expiration"];
+const categories = ["AI","Development","Design","Productivity","Marketing","Analytics","Finance","Infrastructure","Research","Other"];
+type Profile = { email: string; displayName: string; initials: string };
+const THEME_KEY = "stackd:theme";
 type View = "Home" | "My Stack" | "Projects" | "Stack Map" | "Trials" | "Subscriptions" | "Saved" | "Inbox" | "Ask Stackd" | "Settings";
 type AppItem = {
   id: number | string;
@@ -28,29 +33,11 @@ type AppItem = {
 };
 type EnrichedCandidate = AppItem & { input: string; error?: string };
 
-const seedApps: AppItem[] = [
-  { id: 1, name: "OpenAI", initials: "◎", tone: "ink", description: "AI models and developer platform", category: "AI", status: "Active", cost: 42, projects: ["Rally", "Object Report"], sources: ["GitHub", "Gmail"], last: "Today", confidence: 98, website: "openai.com" },
-  { id: 2, name: "Anthropic", initials: "A", tone: "sand", description: "AI research and Claude models", category: "AI", status: "Active", cost: 20, projects: ["Rally"], sources: ["GitHub", "Gmail"], last: "Today", confidence: 96, website: "anthropic.com" },
-  { id: 3, name: "Supabase", initials: "S", tone: "mint", description: "Database and backend platform", category: "Development", status: "Active", cost: 25, projects: ["Rally", "Object Report"], sources: ["Google", "Gmail", "GitHub"], last: "Today", confidence: 98, website: "supabase.com" },
-  { id: 4, name: "Railway", initials: "R", tone: "violet", description: "Application deployment platform", category: "Infrastructure", status: "Active", cost: 34, projects: ["Rally"], sources: ["GitHub", "Gmail"], last: "Yesterday", confidence: 94, website: "railway.com" },
-  { id: 5, name: "Vercel", initials: "▲", tone: "ink", description: "Frontend cloud and deployments", category: "Infrastructure", status: "Active", cost: 20, projects: ["Object Report"], sources: ["GitHub"], last: "2 days ago", confidence: 91, website: "vercel.com" },
-  { id: 6, name: "Cursor", initials: "C", tone: "charcoal", description: "AI-native code editor", category: "Development", status: "Trialing", cost: 20, projects: ["Personal Tools"], sources: ["Gmail"], last: "Today", confidence: 88, website: "cursor.com" },
-  { id: 7, name: "Figma", initials: "F", tone: "coral", description: "Collaborative product design", category: "Design", status: "Active", cost: 15, projects: ["Rally", "Object Report"], sources: ["Google", "Gmail"], last: "Yesterday", confidence: 95, website: "figma.com" },
-  { id: 8, name: "Granola", initials: "G", tone: "amber", description: "AI-powered meeting notes", category: "Productivity", status: "Active", cost: 18, projects: ["Personal Tools"], sources: ["Gmail"], last: "Today", confidence: 89, website: "granola.ai" },
-  { id: 9, name: "Mapbox", initials: "M", tone: "blue", description: "Maps, navigation, and location", category: "Development", status: "Active", cost: 12, projects: ["Rally"], sources: ["GitHub"], last: "3 days ago", confidence: 87, website: "mapbox.com" },
-  { id: 10, name: "Langfuse", initials: "L", tone: "indigo", description: "LLM observability and tracing", category: "Analytics", status: "Active", cost: 29, projects: ["Rally"], sources: ["GitHub"], last: "Today", confidence: 93, website: "langfuse.com" },
-  { id: 11, name: "Arcade", initials: "A", tone: "blue", description: "Interactive product demos", category: "Marketing", status: "Trialing", cost: 32, projects: ["Object Report"], sources: ["Gmail"], last: "Yesterday", confidence: 84, website: "arcade.software" },
-  { id: 12, name: "Perplexity", initials: "P", tone: "teal", description: "AI answer engine and research", category: "Research", status: "Saved", cost: 0, projects: [], sources: ["Manual"], last: "Saved Aug 24", confidence: 100, website: "perplexity.ai" },
-  { id: 13, name: "Lovable", initials: "L", tone: "pink", description: "AI application builder", category: "Development", status: "Saved", cost: 0, projects: ["New Startup Idea"], sources: ["Manual"], last: "Saved Aug 21", confidence: 100, website: "lovable.dev" },
-  { id: 14, name: "PostHog", initials: "H", tone: "yellow", description: "Product analytics platform", category: "Analytics", status: "Needs Review", cost: 0, projects: [], sources: ["GitHub"], last: "19 days ago", confidence: 61, website: "posthog.com" },
-  { id: 15, name: "Jasper", initials: "J", tone: "lilac", description: "AI marketing content platform", category: "Marketing", status: "Inactive", cost: 49, projects: [], sources: ["Gmail"], last: "4 months ago", confidence: 41, website: "jasper.ai" },
-  { id: 16, name: "Stripe", initials: "S", tone: "indigo", description: "Payments and billing infrastructure", category: "Finance", status: "Active", cost: 0, projects: ["Object Report"], sources: ["GitHub"], last: "Yesterday", confidence: 92, website: "stripe.com" },
-];
 
-const nav: { label: View; glyph: string; count?: string }[] = [
-  { label: "Home", glyph: "⌂" }, { label: "My Stack", glyph: "▦", count: "147" }, { label: "Projects", glyph: "◫", count: "4" },
-  { label: "Stack Map", glyph: "⌁" }, { label: "Trials", glyph: "◷", count: "8" }, { label: "Subscriptions", glyph: "$", count: "34" }, { label: "Saved", glyph: "◇", count: "31" },
-  { label: "Inbox", glyph: "↧", count: "17" },
+const nav: { label: View; glyph: string }[] = [
+  { label: "Home", glyph: "⌂" }, { label: "My Stack", glyph: "▦" }, { label: "Projects", glyph: "◫" },
+  { label: "Stack Map", glyph: "⌁" }, { label: "Trials", glyph: "◷" }, { label: "Subscriptions", glyph: "$" }, { label: "Saved", glyph: "◇" },
+  { label: "Inbox", glyph: "↧" },
 ];
 
 const discoveries = [
@@ -60,24 +47,7 @@ const discoveries = [
   { name: "Granola", initials: "G", tone: "amber", source: "Gmail", confidence: 91, detail: "5 recent meeting summaries" },
 ];
 
-const trialData = [
-  { name: "Cursor", days: 1, date: "Sep 2", cost: 20, active: "Used today", tone: "charcoal", initials: "C" },
-  { name: "Arcade", days: 3, date: "Sep 4", cost: 32, active: "Used yesterday", tone: "blue", initials: "A" },
-  { name: "Clay", days: 6, date: "Sep 7", cost: 149, active: "No activity in 8 days", tone: "mint", initials: "C" },
-  { name: "Framer", days: 12, date: "Sep 13", cost: 30, active: "Used 4 days ago", tone: "ink", initials: "F" },
-];
 
-const subscriptionData = [
-  { name: "OpenAI", initials: "◎", tone: "ink", state: "Active", cost: 42, cadence: "Monthly", renewal: "Sep 18", lastPayment: "Aug 18", activity: "Used today", project: "Rally" },
-  { name: "Railway", initials: "R", tone: "violet", state: "Active", cost: 34, cadence: "Monthly", renewal: "Sep 12", lastPayment: "Aug 12", activity: "Used yesterday", project: "Rally" },
-  { name: "Supabase", initials: "S", tone: "mint", state: "Active", cost: 25, cadence: "Monthly", renewal: "Sep 21", lastPayment: "Aug 21", activity: "Used today", project: "Rally" },
-  { name: "Figma", initials: "F", tone: "coral", state: "Active", cost: 15, cadence: "Monthly", renewal: "Sep 9", lastPayment: "Aug 9", activity: "Used yesterday", project: "Object Report" },
-  { name: "Granola", initials: "G", tone: "amber", state: "Active", cost: 18, cadence: "Monthly", renewal: "Sep 26", lastPayment: "Aug 26", activity: "Used today", project: "Personal Tools" },
-  { name: "Jasper", initials: "J", tone: "lilac", state: "Inactive", cost: 49, cadence: "Monthly", canceled: "Aug 14", lastPayment: "Jul 14", accessEnds: "Ended Aug 14", activity: "Last used Apr 19", project: "Unassigned" },
-  { name: "Canva", initials: "C", tone: "blue", state: "Inactive", cost: 15, cadence: "Monthly", canceled: "Jul 28", lastPayment: "Jun 28", accessEnds: "Ended Jul 28", activity: "Last used Jun 4", project: "Personal Tools" },
-  { name: "Notion", initials: "N", tone: "ink", state: "Inactive", cost: 10, cadence: "Monthly", canceled: "Jun 3", lastPayment: "May 3", accessEnds: "Ended Jun 3", activity: "Last used May 17", project: "Personal Tools" },
-  { name: "Slack", initials: "S", tone: "coral", state: "Inactive", cost: 8, cadence: "Monthly", canceled: "May 22", lastPayment: "Apr 22", accessEnds: "Ended May 22", activity: "Last used Apr 30", project: "Agency Work" },
-];
 
 const projectData = [
   { name: "Rally", description: "AI-powered local companion", tools: 7, cost: 184, active: 7, updated: "Today", accent: "cobalt", appNames: ["OpenAI", "Supabase", "Railway", "Mapbox", "Langfuse", "Anthropic"] },
@@ -131,8 +101,10 @@ export default function StackdApp() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All statuses");
   const [categoryFilter, setCategoryFilter] = useState("All categories");
+  const [sort, setSort] = useState<SortKey>("Recently updated");
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const toastTimer = useRef<number | null>(null);
   const [grid, setGrid] = useState(true);
-  const [dark, setDark] = useState(false);
   const [modal, setModal] = useState(false);
   const [smartUpload, setSmartUpload] = useState(false);
   const [toast, setToast] = useState("");
@@ -142,6 +114,17 @@ export default function StackdApp() {
   const [mapNodes, setMapNodes] = useState(mapSeed);
   const [mapMode, setMapMode] = useState<"Project Map" | "Entire Stack">("Project Map");
   const [dragging, setDragging] = useState<number | null>(null);
+
+  const dark = useSyncExternalStore(subscribeTheme, readTheme, () => false);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/me")
+      .then((response) => response.ok ? response.json() as Promise<{ user: Profile | null }> : null)
+      .then((body) => { if (active && body?.user) setProfile(body.user); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -156,17 +139,24 @@ export default function StackdApp() {
     return () => { active = false; };
   }, []);
 
-  const filtered = useMemo(() => apps.filter((app) => {
+  const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return (!q || `${app.name} ${app.description} ${app.category}`.toLowerCase().includes(q)) &&
+    const matches = apps.filter((app) =>
+      (!q || `${app.name} ${app.description} ${app.category}`.toLowerCase().includes(q)) &&
       (statusFilter === "All statuses" || app.status === statusFilter) &&
-      (categoryFilter === "All categories" || app.category === categoryFilter);
-  }), [apps, search, statusFilter, categoryFilter]);
+      (categoryFilter === "All categories" || app.category === categoryFilter));
+    return sortApps(matches, sort);
+  }, [apps, search, statusFilter, categoryFilter, sort]);
 
-  function flash(message: string) {
+  const filtersActive = search !== "" || statusFilter !== "All statuses" || categoryFilter !== "All categories" || sort !== "Recently updated";
+  function clearFilters() { setSearch(""); setStatusFilter("All statuses"); setCategoryFilter("All categories"); setSort("Recently updated"); }
+
+  const flash = useCallback((message: string) => {
     setToast(message);
-    window.setTimeout(() => setToast(""), 2400);
-  }
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(""), 2400);
+  }, []);
+  useEffect(() => () => { if (toastTimer.current) window.clearTimeout(toastTimer.current); }, []);
 
   function navigate(next: View) {
     setSelectedApp(null);
@@ -214,7 +204,7 @@ export default function StackdApp() {
       const headers = (rows.shift() ?? []).map((header) => header.trim().toLowerCase());
       importedApps = rows.map((row) => {
         const record = Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""]));
-        return { name: record.name, website: record.website || record.url, description: record.description, category: record.category || "Other", status: record.status || "Needs Review", cost: Number(record.monthly_cost || record.cost || 0), billingFrequency: record.billing_frequency || "Monthly", renewalDate: record.renewal_date, projects: record.project ? [record.project] : [], notes: record.notes, sources: ["Import"], last: "Imported today", confidence: 100 };
+        return { name: record.name, website: record.website || record.url, description: record.description, category: record.category || "Other", status: isStatus(record.status) ? record.status : "Needs Review", cost: Number(record.monthly_cost || record.cost || 0), billingFrequency: record.billing_frequency || "Monthly", renewalDate: record.renewal_date, projects: record.project ? [record.project] : [], notes: record.notes, sources: ["Import"], last: "Imported today", confidence: 100 };
       });
     }
     const response = await fetch("/api/apps/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ apps: importedApps }) });
@@ -270,21 +260,21 @@ export default function StackdApp() {
       <aside className="sidebar">
         <button className="brand" onClick={() => navigate("Home")} aria-label="Stackd home"><span className="brand-mark">s</span><span>stackd</span><i>private beta</i></button>
         <nav className="primary-nav" aria-label="Primary navigation">
-          {nav.map((item) => { const liveCount = item.label === "My Stack" ? apps.length : item.label === "Subscriptions" ? apps.filter((app) => app.cost > 0).length : item.label === "Trials" ? apps.filter((app) => app.status === "Trialing").length : item.label === "Saved" ? apps.filter((app) => app.status === "Saved").length : item.label === "Inbox" ? inboxCount : item.count; return <button key={item.label} className={view === item.label && !selectedApp ? "active" : ""} onClick={() => navigate(item.label)}><span className="nav-glyph">{item.glyph}</span><span>{item.label === "Inbox" ? "Inbox / Discoveries" : item.label}</span>{liveCount !== undefined && <em>{liveCount}</em>}</button>; })}
+          {nav.map((item) => { const liveCount = item.label === "My Stack" ? apps.length : item.label === "Subscriptions" ? apps.filter((app) => app.cost > 0).length : item.label === "Trials" ? apps.filter((app) => app.status === "Trialing").length : item.label === "Saved" ? apps.filter((app) => app.status === "Saved").length : item.label === "Inbox" ? inboxCount : item.label === "Projects" ? new Set(apps.flatMap((app) => app.projects)).size : undefined; return <button key={item.label} className={view === item.label && !selectedApp ? "active" : ""} onClick={() => navigate(item.label)}><span className="nav-glyph">{item.glyph}</span><span>{item.label === "Inbox" ? "Inbox / Discoveries" : item.label}</span>{liveCount !== undefined && <em>{liveCount}</em>}</button>; })}
         </nav>
         <div className="nav-divider" />
         <button className={`ask-nav ${view === "Ask Stackd" ? "active" : ""}`} onClick={() => navigate("Ask Stackd")}><span className="spark">✦</span><span>Ask Stackd</span><kbd>⌘ K</kbd></button>
         <div className="sidebar-spacer" />
         <button className={`settings-link ${view === "Settings" ? "active" : ""}`} onClick={() => navigate("Settings")}><span>⚙</span> Settings</button>
         <div className="connection-health"><div><span className="connection-icon"><img src="/logos/gmail.png" alt="Gmail logo" /></span><span>Gmail</span><b>Source of truth</b></div></div>
-        <div className="profile"><div className="avatar">RP</div><div><strong>Riley Porc</strong><span>Personal workspace</span></div><button aria-label="Profile menu">•••</button></div>
+        <div className="profile"><div className="avatar">{profile?.initials ?? "…"}</div><div><strong>{profile?.displayName ?? "Loading…"}</strong><span>{profile?.email ?? "Personal workspace"}</span></div></div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
           <button className="mobile-brand" onClick={() => navigate("Home")}>stackd</button>
           <button className="command-search" onClick={() => { navigate("My Stack"); window.setTimeout(() => document.getElementById("stack-search")?.focus(), 50); }}><span>⌕</span> Search your stack… <kbd>⌘ K</kbd></button>
-          <div className="top-actions"><button className="icon-button" aria-label="Toggle theme" onClick={() => setDark(!dark)}>{dark ? "☼" : "◐"}</button><button className="icon-button notification" aria-label="Notifications">♢<span /></button><button className="add-button" onClick={() => setModal(true)}>＋ Add App</button></div>
+          <div className="top-actions"><button className="icon-button" aria-label="Toggle theme" onClick={() => setTheme(!dark)}>{dark ? "☼" : "◐"}</button><button className="icon-button notification" aria-label="Notifications">♢<span /></button><button className="add-button" onClick={() => setModal(true)}>＋ Add App</button></div>
         </header>
 
         <div className="page-wrap">
@@ -295,7 +285,7 @@ export default function StackdApp() {
 
           {selectedApp ? <AppDetail app={selectedApp} onAction={flash} onEdit={(app) => { setEditingApp(app); setModal(true); }} onDelete={async (app) => { try { await deleteApp(app); } catch (error) { flash(error instanceof Error ? error.message : "Unable to remove app."); } }} /> : <>
             {view === "Home" && <HomeView apps={apps} dataReady={dataReady} dataError={dataError} onNavigate={navigate} onOpenApp={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onDiscover={async (item, status) => { try { const app = await createApp({ id: "", name: item.name, initials: item.initials, tone: item.tone, description: item.detail, category: "Other", status, cost: 0, projects: [], sources: [item.source], last: "Today", confidence: item.confidence }); flash(`${app.name} was added to your stack.`); } catch (error) { flash(error instanceof Error ? error.message : "Unable to add app."); } }} onAction={flash} />}
-            {view === "My Stack" && <StackView apps={filtered} allApps={apps} dataReady={dataReady} dataError={dataError} search={search} setSearch={setSearch} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} grid={grid} setGrid={setGrid} onOpen={openApp} onImport={async (file) => { try { await importApps(file); } catch (error) { flash(error instanceof Error ? error.message : "Import failed."); } }} onExport={exportApps} onSmartUpload={() => setSmartUpload(true)} onAdd={() => { setEditingApp(null); setModal(true); }} />}
+            {view === "My Stack" && <StackView apps={filtered} allApps={apps} dataReady={dataReady} dataError={dataError} search={search} setSearch={setSearch} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} sort={sort} setSort={setSort} filtersActive={filtersActive} onClearFilters={clearFilters} grid={grid} setGrid={setGrid} onOpen={openApp} onImport={async (file) => { try { await importApps(file); } catch (error) { flash(error instanceof Error ? error.message : "Import failed."); } }} onExport={exportApps} onSmartUpload={() => setSmartUpload(true)} onAdd={() => { setEditingApp(null); setModal(true); }} />}
             {view === "Projects" && <ProjectsView onOpenApp={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onMap={() => navigate("Stack Map")} />}
             {view === "Stack Map" && <MapView nodes={mapNodes} setNodes={setMapNodes} mode={mapMode} setMode={setMapMode} dragging={dragging} setDragging={setDragging} onOpen={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onAction={flash} />}
             {view === "Trials" && <TrialsView apps={apps} onAction={flash} />}
@@ -303,7 +293,7 @@ export default function StackdApp() {
             {view === "Saved" && <SavedView apps={apps.filter((a) => a.status === "Saved")} onOpen={openApp} onAdd={() => setModal(true)} />}
             {view === "Inbox" && <InboxView count={inboxCount} setCount={setInboxCount} onAction={flash} />}
             {view === "Ask Stackd" && <AskView chat={chat} input={chatInput} setInput={setChatInput} ask={ask} />}
-            {view === "Settings" && <SettingsView dark={dark} setDark={setDark} onAction={flash} />}
+            {view === "Settings" && <SettingsView dark={dark} setDark={setTheme} onAction={flash} />}
           </>}
         </div>
       </section>
@@ -338,10 +328,10 @@ function HomeView({ apps, dataReady, dataError, onNavigate }: { apps: AppItem[];
   </div>;
 }
 
-function StackView({ apps, allApps, dataReady, dataError, search, setSearch, statusFilter, setStatusFilter, categoryFilter, setCategoryFilter, grid, setGrid, onOpen, onImport, onExport, onSmartUpload, onAdd }: { apps: AppItem[]; allApps: AppItem[]; dataReady: boolean; dataError: string; search: string; setSearch: (v: string) => void; statusFilter: string; setStatusFilter: (v: string) => void; categoryFilter: string; setCategoryFilter: (v: string) => void; grid: boolean; setGrid: (v: boolean) => void; onOpen: (app: AppItem) => void; onImport: (file: File) => Promise<void>; onExport: () => void; onSmartUpload: () => void; onAdd: () => void }) {
+function StackView({ apps, allApps, dataReady, dataError, search, setSearch, statusFilter, setStatusFilter, categoryFilter, setCategoryFilter, sort, setSort, filtersActive, onClearFilters, grid, setGrid, onOpen, onImport, onExport, onSmartUpload, onAdd }: { apps: AppItem[]; allApps: AppItem[]; dataReady: boolean; dataError: string; search: string; setSearch: (v: string) => void; statusFilter: string; setStatusFilter: (v: string) => void; categoryFilter: string; setCategoryFilter: (v: string) => void; sort: SortKey; setSort: (v: SortKey) => void; filtersActive: boolean; onClearFilters: () => void; grid: boolean; setGrid: (v: boolean) => void; onOpen: (app: AppItem) => void; onImport: (file: File) => Promise<void>; onExport: () => void; onSmartUpload: () => void; onAdd: () => void }) {
   const importRef = useRef<HTMLInputElement>(null);
-  return <div><div className="library-toolbar"><label className="library-search">⌕<input id="stack-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${allApps.length} tools`} /></label><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option>All statuses</option>{["Active","Trialing","Saved","Inactive","Needs Review"].map((v) => <option key={v}>{v}</option>)}</select><select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}><option>All categories</option>{["AI","Development","Design","Productivity","Marketing","Analytics","Finance","Infrastructure","Research","Other"].map((v) => <option key={v}>{v}</option>)}</select><select aria-label="Sort tools"><option>Recently used</option><option>Recently discovered</option><option>Cost high to low</option><option>Alphabetical</option><option>Trial expiration</option><option>Most connected</option></select><div className="library-data-actions"><input ref={importRef} type="file" accept=".csv,.json,text/csv,application/json" onChange={async (event) => { const file = event.target.files?.[0]; if (file) await onImport(file); event.target.value = ""; }} /><button className="smart-upload-button" onClick={onSmartUpload}>✦ Smart upload</button><button onClick={() => importRef.current?.click()}>↑ CSV / JSON</button><button onClick={onExport} disabled={!allApps.length}>↓ Export</button><button className="primary-mini" onClick={onAdd}>＋ Add</button></div><div className="view-toggle"><button className={grid ? "active" : ""} onClick={() => setGrid(true)}>▦</button><button className={!grid ? "active" : ""} onClick={() => setGrid(false)}>☷</button></div></div>
-    <div className="results-label"><span>{apps.length} tools shown</span><button>Clear filters</button></div>
+  return <div><div className="library-toolbar"><label className="library-search">⌕<input id="stack-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${allApps.length} tools`} /></label><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option>All statuses</option>{STATUSES.map((v) => <option key={v}>{v}</option>)}</select><select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}><option>All categories</option>{categories.map((v) => <option key={v}>{v}</option>)}</select><select aria-label="Sort tools" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>{sortKeys.map((v) => <option key={v}>{v}</option>)}</select><div className="library-data-actions"><input ref={importRef} type="file" accept=".csv,.json,text/csv,application/json" onChange={async (event) => { const file = event.target.files?.[0]; if (file) await onImport(file); event.target.value = ""; }} /><button className="smart-upload-button" onClick={onSmartUpload}>✦ Smart upload</button><button onClick={() => importRef.current?.click()}>↑ CSV / JSON</button><button onClick={onExport} disabled={!allApps.length}>↓ Export</button><button className="primary-mini" onClick={onAdd}>＋ Add</button></div><div className="view-toggle"><button className={grid ? "active" : ""} aria-label="Grid view" aria-pressed={grid} onClick={() => setGrid(true)}>▦</button><button className={!grid ? "active" : ""} aria-label="List view" aria-pressed={!grid} onClick={() => setGrid(false)}>☷</button></div></div>
+    <div className="results-label"><span>{apps.length} tools shown</span>{filtersActive && <button onClick={onClearFilters}>Clear filters</button>}</div>
     {!dataReady ? <EmptyState title="Loading your library…" text="Stackd is retrieving your privately stored apps." /> : dataError ? <EmptyState title="Your library could not be loaded." text={dataError} /> : allApps.length === 0 ? <div className="live-empty-state"><span className="empty-orbit">＋</span><span className="eyebrow">Live library</span><h2>Start with the tools you use today.</h2><p>Add an app in seconds, or import a CSV/JSON file to populate your stack in bulk.</p><div><button className="primary-action" onClick={onAdd}>＋ Add your first app</button><button onClick={() => importRef.current?.click()}>↑ Import a file</button></div><small>Suggested CSV columns: name, website, category, status, monthly_cost, project, notes</small></div> : apps.length === 0 ? <EmptyState title="No tools match those filters." text="Try broadening your search or clearing a filter." /> : grid ? <section className="app-grid">{apps.map((app) => <AppCard key={app.id} app={app} onOpen={onOpen} />)}</section> : <section className="app-list"><div className="list-header"><span>Tool</span><span>Status</span><span>Projects</span><span>Last signal</span><span>Cost</span></div>{apps.map((app) => <button className="app-list-row" key={app.id} onClick={() => onOpen(app)}><div><Logo item={app} small /><span><strong>{app.name}</strong><small>{app.category}</small></span></div><StatusBadge status={app.status} /><span>{app.projects.join(", ") || "—"}</span><span>{app.last}</span><strong>{app.cost ? `$${app.cost}/mo` : "Free"}</strong></button>)}</section>}
   </div>;
 }
@@ -432,23 +422,58 @@ function SettingsView({ dark, setDark, onAction }: { dark: boolean; setDark: (v:
 }
 
 function SmartUploadModal({ onClose, onImport }: { onClose: () => void; onImport: (apps: EnrichedCandidate[]) => Promise<void> }) {
+  useEscape(onClose);
   const [entries, setEntries] = useState(""); const [candidates, setCandidates] = useState<EnrichedCandidate[]>([]); const [selected, setSelected] = useState<Set<number>>(new Set()); const [working, setWorking] = useState(false); const [error, setError] = useState("");
   async function enrich() { const lines = entries.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); if (!lines.length) return; setWorking(true); setError(""); try { const response = await fetch("/api/apps/enrich", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ entries: lines }) }); const body = await response.json() as { candidates?: EnrichedCandidate[]; error?: string }; if (!response.ok) throw new Error(body.error ?? "Unable to pull company information."); const enriched = (body.candidates ?? []).map((candidate, index) => ({ ...candidate, id: `preview-${index}` })); setCandidates(enriched); setSelected(new Set(enriched.map((_, index) => index))); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to pull company information."); } finally { setWorking(false); } }
   function update(index: number, changes: Partial<EnrichedCandidate>) { setCandidates((previous) => previous.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, ...changes } : candidate)); }
   async function save() { setWorking(true); setError(""); try { await onImport(candidates.filter((_, index) => selected.has(index))); } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to import apps."); setWorking(false); } }
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="smart-upload-modal" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Website-powered enrichment</span><h2>Smart upload tools</h2><p>Paste one tool per line. Use <b>Company | website.com</b> for the most accurate result.</p></div><button type="button" onClick={onClose}>×</button></div>{!candidates.length ? <><label className="bulk-entry"><span>Apps or official websites</span><textarea autoFocus value={entries} onChange={(event) => setEntries(event.target.value)} placeholder={"Figma | figma.com\nNotion | notion.so\nopenai.com"} /></label><div className="upload-explainer"><span>1</span><p><b>Stackd visits each official website</b> to pull its company name, summary, canonical domain, and logo.</p><span>2</span><p><b>A category is suggested</b> from the company’s own description. Every result starts as Needs Review.</p></div></> : <div className="enrichment-results"><div className="enrichment-summary"><strong>{candidates.length} tools ready to review</strong><span>{candidates.filter((candidate) => candidate.error).length} need manual attention</span></div>{candidates.map((candidate, index) => <article className={`enrichment-row ${candidate.error ? "has-warning" : ""}`} key={candidate.input}><input type="checkbox" checked={selected.has(index)} onChange={() => setSelected((current) => { const next = new Set(current); next.has(index) ? next.delete(index) : next.add(index); return next; })} aria-label={`Import ${candidate.name}`} /><Logo item={candidate} small /><div className="enrichment-fields"><div><input value={candidate.name} onChange={(event) => update(index, { name: event.target.value })} aria-label="Company name" /><select value={candidate.category} onChange={(event) => update(index, { category: event.target.value })}>{["AI","Development","Design","Productivity","Marketing","Analytics","Finance","Infrastructure","Research","Other"].map((category) => <option key={category}>{category}</option>)}</select></div><input value={candidate.website ?? ""} onChange={(event) => update(index, { website: event.target.value })} placeholder="official website" aria-label="Official website" /><textarea value={candidate.description} onChange={(event) => update(index, { description: event.target.value })} placeholder="Company summary" aria-label="Company summary" />{candidate.error && <small>⚠ {candidate.error}</small>}</div></article>)}</div>}{error && <p className="modal-error">{error}</p>}<div className="modal-footer"><button type="button" onClick={candidates.length ? () => { setCandidates([]); setError(""); } : onClose}>{candidates.length ? "← Back" : "Cancel"}</button>{candidates.length ? <button className="primary-action" type="button" disabled={working || selected.size === 0} onClick={() => void save()}>{working ? "Adding…" : `Add ${selected.size} to Stack`}</button> : <button className="primary-action" type="button" disabled={working || !entries.trim()} onClick={() => void enrich()}>{working ? "Pulling company info…" : "Review enriched tools →"}</button>}</div></section></div>;
+  return <div className="modal-backdrop" onMouseDown={onClose}><section className="smart-upload-modal" role="dialog" aria-modal="true" aria-labelledby="smart-upload-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Website-powered enrichment</span><h2 id="smart-upload-title">Smart upload tools</h2><p>Paste one tool per line. Use <b>Company | website.com</b> for the most accurate result.</p></div><button type="button" aria-label="Close" onClick={onClose}>×</button></div>{!candidates.length ? <><label className="bulk-entry"><span>Apps or official websites</span><textarea autoFocus value={entries} onChange={(event) => setEntries(event.target.value)} placeholder={"Figma | figma.com\nNotion | notion.so\nopenai.com"} /></label><div className="upload-explainer"><span>1</span><p><b>Stackd visits each official website</b> to pull its company name, summary, canonical domain, and logo.</p><span>2</span><p><b>A category is suggested</b> from the company’s own description. Every result starts as Needs Review.</p></div></> : <div className="enrichment-results"><div className="enrichment-summary"><strong>{candidates.length} tools ready to review</strong><span>{candidates.filter((candidate) => candidate.error).length} need manual attention</span></div>{candidates.map((candidate, index) => <article className={`enrichment-row ${candidate.error ? "has-warning" : ""}`} key={candidate.input}><input type="checkbox" checked={selected.has(index)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} aria-label={`Import ${candidate.name}`} /><Logo item={candidate} small /><div className="enrichment-fields"><div><input value={candidate.name} onChange={(event) => update(index, { name: event.target.value })} aria-label="Company name" /><select value={candidate.category} onChange={(event) => update(index, { category: event.target.value })}>{["AI","Development","Design","Productivity","Marketing","Analytics","Finance","Infrastructure","Research","Other"].map((category) => <option key={category}>{category}</option>)}</select></div><input value={candidate.website ?? ""} onChange={(event) => update(index, { website: event.target.value })} placeholder="official website" aria-label="Official website" /><textarea value={candidate.description} onChange={(event) => update(index, { description: event.target.value })} placeholder="Company summary" aria-label="Company summary" />{candidate.error && <small>⚠ {candidate.error}</small>}</div></article>)}</div>}{error && <p className="modal-error">{error}</p>}<div className="modal-footer"><button type="button" onClick={candidates.length ? () => { setCandidates([]); setError(""); } : onClose}>{candidates.length ? "← Back" : "Cancel"}</button>{candidates.length ? <button className="primary-action" type="button" disabled={working || selected.size === 0} onClick={() => void save()}>{working ? "Adding…" : `Add ${selected.size} to Stack`}</button> : <button className="primary-action" type="button" disabled={working || !entries.trim()} onClick={() => void enrich()}>{working ? "Pulling company info…" : "Review enriched tools →"}</button>}</div></section></div>;
 }
 
 function AddAppModal({ initialApp, onClose, onAdd }: { initialApp: AppItem | null; onClose: () => void; onAdd: (app: AppItem) => Promise<void> }) {
+  useEscape(onClose);
   const [name, setName] = useState(initialApp?.name ?? ""); const [website, setWebsite] = useState(initialApp?.website ?? ""); const [category, setCategory] = useState(initialApp?.category ?? "Other"); const [status, setStatus] = useState<Status>(initialApp?.status ?? "Active"); const [project, setProject] = useState(initialApp?.projects[0] ?? "No project"); const [cost, setCost] = useState(initialApp?.cost ? String(initialApp.cost) : ""); const [billingFrequency, setBillingFrequency] = useState(initialApp?.billingFrequency ?? "Monthly"); const [renewalDate, setRenewalDate] = useState(initialApp?.renewalDate ?? ""); const [trialEndDate, setTrialEndDate] = useState(initialApp?.trialEndDate ?? ""); const [cancellationDate, setCancellationDate] = useState(initialApp?.cancellationDate ?? ""); const [accessEndDate, setAccessEndDate] = useState(initialApp?.accessEndDate ?? ""); const [notes, setNotes] = useState(initialApp?.notes ?? ""); const [saving, setSaving] = useState(false);
   async function submit(e: React.FormEvent) { e.preventDefault(); setSaving(true); try { const display = name.trim(); await onAdd({ id: initialApp?.id ?? "", name: display, initials: initialApp?.initials ?? display.slice(0,2).toUpperCase(), tone: initialApp?.tone ?? "blue", description: initialApp?.description ?? "Manually added software tool", category, status, cost: Number(cost) || 0, billingFrequency, renewalDate: renewalDate || undefined, trialEndDate: trialEndDate || undefined, cancellationDate: cancellationDate || undefined, accessEndDate: accessEndDate || undefined, projects: project === "No project" ? [] : [project], sources: initialApp?.sources ?? ["Manual"], last: initialApp?.last ?? "Just now", confidence: initialApp?.confidence ?? 100, website: website.replace(/^https?:\/\//, ""), notes }); } finally { setSaving(false); } }
-  return <div className="modal-backdrop" onMouseDown={onClose}><form className="add-modal" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Live library</span><h2>{initialApp ? "Edit app" : "Add an app"}</h2><p>Save billing, status, and project details to your private Stackd library.</p></div><button type="button" onClick={onClose}>×</button></div><div className="form-split equal"><label><span>App name</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="Arcade" /></label><label><span>Official website</span><input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="arcade.software" /></label></div><div className="form-split equal"><label><span>Category</span><select value={category} onChange={(e) => setCategory(e.target.value)}>{["AI","Development","Design","Productivity","Marketing","Analytics","Finance","Infrastructure","Research","Other"].map((value) => <option key={value}>{value}</option>)}</select></label><label><span>Assign to project</span><select value={project} onChange={(e) => setProject(e.target.value)}><option>No project</option>{projectData.map((p) => <option key={p.name}>{p.name}</option>)}</select></label></div><fieldset><legend>Status</legend><div className="status-picker five">{(["Active","Trialing","Saved","Inactive","Needs Review"] as Status[]).map((v) => <label key={v} className={status === v ? "active" : ""}><input type="radio" name="status" value={v} checked={status === v} onChange={() => setStatus(v)} /><span>{v}</span></label>)}</div></fieldset><div className="form-split thirds"><label><span>Monthly cost</span><div className="cost-field">$<input type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0" /></div></label><label><span>Billing</span><select value={billingFrequency} onChange={(e) => setBillingFrequency(e.target.value)}><option>Monthly</option><option>Annual</option><option>Usage-based</option><option>Free</option></select></label><label><span>{status === "Trialing" ? "Trial ends" : "Renews"}</span><input type="date" value={status === "Trialing" ? trialEndDate : renewalDate} onChange={(e) => status === "Trialing" ? setTrialEndDate(e.target.value) : setRenewalDate(e.target.value)} /></label></div>{status === "Inactive" && <div className="form-split equal"><label><span>Canceled</span><input type="date" value={cancellationDate} onChange={(e) => setCancellationDate(e.target.value)} /></label><label><span>Access ended</span><input type="date" value={accessEndDate} onChange={(e) => setAccessEndDate(e.target.value)} /></label></div>}<label><span>Notes <em>Optional</em></span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Plan details, cancellation notes, or why this app matters." /></label><div className="modal-footer"><button type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={saving}>{saving ? "Saving…" : initialApp ? "Save changes" : "Add to Stack"}</button></div></form></div>;
+  return <div className="modal-backdrop" onMouseDown={onClose}><form className="add-modal" role="dialog" aria-modal="true" aria-labelledby="add-app-title" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Live library</span><h2 id="add-app-title">{initialApp ? "Edit app" : "Add an app"}</h2><p>Save billing, status, and project details to your private Stackd library.</p></div><button type="button" aria-label="Close" onClick={onClose}>×</button></div><div className="form-split equal"><label><span>App name</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="Arcade" /></label><label><span>Official website</span><input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="arcade.software" /></label></div><div className="form-split equal"><label><span>Category</span><select value={category} onChange={(e) => setCategory(e.target.value)}>{categories.map((value) => <option key={value}>{value}</option>)}</select></label><label><span>Assign to project</span><select value={project} onChange={(e) => setProject(e.target.value)}><option>No project</option>{projectData.map((p) => <option key={p.name}>{p.name}</option>)}</select></label></div><fieldset><legend>Status</legend><div className="status-picker five">{(["Active","Trialing","Saved","Inactive","Needs Review"] as Status[]).map((v) => <label key={v} className={status === v ? "active" : ""}><input type="radio" name="status" value={v} checked={status === v} onChange={() => setStatus(v)} /><span>{v}</span></label>)}</div></fieldset><div className="form-split thirds"><label><span>Monthly cost</span><div className="cost-field">$<input type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0" /></div></label><label><span>Billing</span><select value={billingFrequency} onChange={(e) => setBillingFrequency(e.target.value)}><option>Monthly</option><option>Annual</option><option>Usage-based</option><option>Free</option></select></label><label><span>{status === "Trialing" ? "Trial ends" : "Renews"}</span><input type="date" value={status === "Trialing" ? trialEndDate : renewalDate} onChange={(e) => status === "Trialing" ? setTrialEndDate(e.target.value) : setRenewalDate(e.target.value)} /></label></div>{status === "Inactive" && <div className="form-split equal"><label><span>Canceled</span><input type="date" value={cancellationDate} onChange={(e) => setCancellationDate(e.target.value)} /></label><label><span>Access ended</span><input type="date" value={accessEndDate} onChange={(e) => setAccessEndDate(e.target.value)} /></label></div>}<label><span>Notes <em>Optional</em></span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Plan details, cancellation notes, or why this app matters." /></label><div className="modal-footer"><button type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={saving}>{saving ? "Saving…" : initialApp ? "Save changes" : "Add to Stack"}</button></div></form></div>;
 }
 
 function parseCsvRow(line: string) {
   const cells: string[] = []; let value = ""; let quoted = false;
   for (let index = 0; index < line.length; index += 1) { const char = line[index]; if (char === '"') { if (quoted && line[index + 1] === '"') { value += '"'; index += 1; } else quoted = !quoted; } else if (char === "," && !quoted) { cells.push(value); value = ""; } else value += char; }
   cells.push(value); return cells;
+}
+
+const themeListeners = new Set<() => void>();
+function subscribeTheme(listener: () => void) {
+  themeListeners.add(listener);
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  media.addEventListener("change", listener);
+  window.addEventListener("storage", listener);
+  return () => { themeListeners.delete(listener); media.removeEventListener("change", listener); window.removeEventListener("storage", listener); };
+}
+function readTheme() {
+  const stored = window.localStorage.getItem(THEME_KEY);
+  return stored ? stored === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+function setTheme(next: boolean) {
+  window.localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+  themeListeners.forEach((listener) => listener());
+}
+
+function useEscape(onClose: () => void) {
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+}
+
+function sortApps(items: AppItem[], key: SortKey) {
+  const sorted = [...items];
+  if (key === "Cost high to low") sorted.sort((a, b) => b.cost - a.cost || a.name.localeCompare(b.name));
+  if (key === "Alphabetical") sorted.sort((a, b) => a.name.localeCompare(b.name));
+  if (key === "Trial expiration") sorted.sort((a, b) => Number(!a.trialEndDate) - Number(!b.trialEndDate) || (a.trialEndDate ?? "").localeCompare(b.trialEndDate ?? "") || a.name.localeCompare(b.name));
+  return sorted;
 }
 
 function csvCell(value: unknown) { const text = String(value ?? ""); return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text; }

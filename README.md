@@ -21,10 +21,22 @@ npm install
 npm run dev
 ```
 
-Build the production bundle with:
+The first time you run the dev server, open http://localhost:3000 once so Miniflare creates the local D1 database, then apply the schema:
 
 ```bash
-npm run build
+npm run db:migrate:local
+```
+
+On localhost the API uses `local@stackd.dev` as the signed-in user; in production identity comes from the ChatGPT `oai-authenticated-user-*` headers.
+
+Other commands:
+
+```bash
+npm run build      # production bundle
+npm run lint       # eslint
+npm run typecheck  # tsc --noEmit
+npm test           # node:test unit tests in tests/
+npm run db:generate  # regenerate drizzle migrations from db/schema.ts
 ```
 
 ## Project structure
