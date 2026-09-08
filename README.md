@@ -42,8 +42,8 @@ npm run db:generate  # regenerate drizzle migrations from db/schema.ts
 ## Project structure
 
 - `app/` — UI and API routes
-- `db/` — database access and schema
-- `drizzle/` — D1 migrations
+- `db/` — database access and schema (`user_apps`, `user_projects`)
+- `drizzle/` — D1 migrations (apply new ones to production with `wrangler d1 migrations apply`)
 - `public/` — logos and social assets
 - `worker/` — Cloudflare Worker entrypoint
 - `.openai/hosting.json` — OpenAI Sites hosting configuration

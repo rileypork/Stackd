@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { STATUSES, isStatus, type Status } from "./api/apps/payload";
+import { ACCENTS, type Accent, type Project } from "./api/projects/payload";
 
 type SortKey = "Recently updated" | "Cost high to low" | "Alphabetical" | "Trial expiration";
 const sortKeys: SortKey[] = ["Recently updated", "Cost high to low", "Alphabetical", "Trial expiration"];
@@ -49,12 +50,12 @@ const discoveries = [
 
 
 
-const projectData = [
-  { name: "Rally", description: "AI-powered local companion", tools: 7, cost: 184, active: 7, updated: "Today", accent: "cobalt", appNames: ["OpenAI", "Supabase", "Railway", "Mapbox", "Langfuse", "Anthropic"] },
-  { name: "Object Report", description: "Editorial commerce and product stories", tools: 9, cost: 112, active: 6, updated: "Yesterday", accent: "coral", appNames: ["OpenAI", "Supabase", "Vercel", "Figma", "Stripe"] },
-  { name: "Personal Tools", description: "Everyday creative and productivity system", tools: 18, cost: 126, active: 12, updated: "Today", accent: "amber", appNames: ["Cursor", "Granola", "Figma", "Perplexity"] },
-  { name: "New Startup Idea", description: "Early-stage experiments and research", tools: 5, cost: 64, active: 2, updated: "Aug 28", accent: "mint", appNames: ["Lovable", "Perplexity", "OpenAI"] },
-];
+function formatUpdated(iso: string) {
+  const date = new Date(iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`);
+  if (Number.isNaN(date.getTime())) return "recently";
+  const days = Math.floor((Date.now() - date.getTime()) / 86_400_000);
+  return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+}
 
 const mapSeed = [
   { id: 1, name: "GitHub", initials: "GH", tone: "ink", x: 70, y: 80, category: "Source", cost: 0 },
@@ -94,6 +95,8 @@ function StatusBadge({ status }: { status: Status }) {
 export default function StackdApp() {
   const [view, setView] = useState<View>("Home");
   const [apps, setApps] = useState<AppItem[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectModal, setProjectModal] = useState<{ open: boolean; project: Project | null }>({ open: false, project: null });
   const [dataReady, setDataReady] = useState(false);
   const [dataError, setDataError] = useState("");
   const [selectedApp, setSelectedApp] = useState<AppItem | null>(null);
@@ -139,10 +142,21 @@ export default function StackdApp() {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    fetch("/api/projects")
+      .then((response) => response.ok ? response.json() as Promise<{ projects?: Project[] }> : null)
+      .then((body) => { if (active && body?.projects) setProjects(body.projects); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  const projectNames = useMemo(() => [...new Set([...projects.map((p) => p.name), ...apps.flatMap((app) => app.projects)])].sort((a, b) => a.localeCompare(b)), [projects, apps]);
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     const matches = apps.filter((app) =>
-      (!q || `${app.name} ${app.description} ${app.category}`.toLowerCase().includes(q)) &&
+      (!q || `${app.name} ${app.description} ${app.category} ${app.projects.join(" ")}`.toLowerCase().includes(q)) &&
       (statusFilter === "All statuses" || app.status === statusFilter) &&
       (categoryFilter === "All categories" || app.category === categoryFilter));
     return sortApps(matches, sort);
@@ -165,6 +179,26 @@ export default function StackdApp() {
 
   function openApp(app: AppItem) {
     setSelectedApp(app);
+  }
+
+  async function saveProject(input: { name: string; description: string; accent: Accent }, existing: Project | null) {
+    const response = await fetch(existing ? `/api/projects/${existing.id}` : "/api/projects", { method: existing ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
+    const body = await response.json() as { project?: Project; apps?: AppItem[]; error?: string };
+    if (!response.ok || !body.project) throw new Error(body.error ?? "Unable to save project.");
+    const saved = body.project;
+    setProjects((previous) => existing ? previous.map((p) => p.id === saved.id ? saved : p) : [...previous, saved].sort((a, b) => a.name.localeCompare(b.name)));
+    if (body.apps) setApps(body.apps);
+    return saved;
+  }
+
+  async function deleteProject(project: Project) {
+    if (!window.confirm(`Delete “${project.name}”? Tools stay in your stack but leave this project.`)) return;
+    const response = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+    const body = await response.json() as { apps?: AppItem[]; error?: string };
+    if (!response.ok) throw new Error(body.error ?? "Unable to delete project.");
+    setProjects((previous) => previous.filter((p) => p.id !== project.id));
+    if (body.apps) setApps(body.apps);
+    flash(`${project.name} was deleted.`);
   }
 
   async function createApp(app: AppItem) {
@@ -286,11 +320,11 @@ export default function StackdApp() {
           {selectedApp ? <AppDetail app={selectedApp} onAction={flash} onEdit={(app) => { setEditingApp(app); setModal(true); }} onDelete={async (app) => { try { await deleteApp(app); } catch (error) { flash(error instanceof Error ? error.message : "Unable to remove app."); } }} /> : <>
             {view === "Home" && <HomeView apps={apps} dataReady={dataReady} dataError={dataError} onNavigate={navigate} onOpenApp={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onDiscover={async (item, status) => { try { const app = await createApp({ id: "", name: item.name, initials: item.initials, tone: item.tone, description: item.detail, category: "Other", status, cost: 0, projects: [], sources: [item.source], last: "Today", confidence: item.confidence }); flash(`${app.name} was added to your stack.`); } catch (error) { flash(error instanceof Error ? error.message : "Unable to add app."); } }} onAction={flash} />}
             {view === "My Stack" && <StackView apps={filtered} allApps={apps} dataReady={dataReady} dataError={dataError} search={search} setSearch={setSearch} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} sort={sort} setSort={setSort} filtersActive={filtersActive} onClearFilters={clearFilters} grid={grid} setGrid={setGrid} onOpen={openApp} onImport={async (file) => { try { await importApps(file); } catch (error) { flash(error instanceof Error ? error.message : "Import failed."); } }} onExport={exportApps} onSmartUpload={() => setSmartUpload(true)} onAdd={() => { setEditingApp(null); setModal(true); }} />}
-            {view === "Projects" && <ProjectsView onOpenApp={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onMap={() => navigate("Stack Map")} />}
+            {view === "Projects" && <ProjectsView projects={projects} apps={apps} onOpenApp={openApp} onNew={() => setProjectModal({ open: true, project: null })} onEdit={(project) => setProjectModal({ open: true, project })} onDelete={async (project) => { try { await deleteProject(project); } catch (error) { flash(error instanceof Error ? error.message : "Unable to delete project."); } }} onOpenProject={(project) => { clearFilters(); setSearch(project.name); navigate("My Stack"); }} />}
             {view === "Stack Map" && <MapView nodes={mapNodes} setNodes={setMapNodes} mode={mapMode} setMode={setMapMode} dragging={dragging} setDragging={setDragging} onOpen={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onAction={flash} />}
             {view === "Trials" && <TrialsView apps={apps} onAction={flash} />}
             {view === "Subscriptions" && <SubscriptionsView apps={apps} onAction={flash} />}
-            {view === "Saved" && <SavedView apps={apps.filter((a) => a.status === "Saved")} onOpen={openApp} onAdd={() => setModal(true)} />}
+            {view === "Saved" && <SavedView apps={apps.filter((a) => a.status === "Saved")} onOpen={openApp} onAdd={() => { setEditingApp(null); setModal(true); }} />}
             {view === "Inbox" && <InboxView count={inboxCount} setCount={setInboxCount} onAction={flash} />}
             {view === "Ask Stackd" && <AskView chat={chat} input={chatInput} setInput={setChatInput} ask={ask} />}
             {view === "Settings" && <SettingsView dark={dark} setDark={setTheme} onAction={flash} />}
@@ -298,7 +332,8 @@ export default function StackdApp() {
         </div>
       </section>
 
-      {modal && <AddAppModal initialApp={editingApp} onClose={() => { setModal(false); setEditingApp(null); }} onAdd={async (app) => { try { const saved = editingApp ? await updateApp({ ...app, id: editingApp.id }) : await createApp(app); setModal(false); setEditingApp(null); navigate("My Stack"); flash(`${saved.name} was ${editingApp ? "updated" : "added to your stack"}.`); } catch (error) { flash(error instanceof Error ? error.message : "Unable to save app."); } }} />}
+      {projectModal.open && <ProjectModal initialProject={projectModal.project} onClose={() => setProjectModal({ open: false, project: null })} onSave={async (input) => { try { const saved = await saveProject(input, projectModal.project); setProjectModal({ open: false, project: null }); flash(projectModal.project ? `${saved.name} was updated.` : `${saved.name} was created.`); } catch (error) { flash(error instanceof Error ? error.message : "Unable to save project."); } }} />}
+      {modal && <AddAppModal projectNames={projectNames} initialApp={editingApp} onClose={() => { setModal(false); setEditingApp(null); }} onAdd={async (app) => { try { const saved = editingApp ? await updateApp({ ...app, id: editingApp.id }) : await createApp(app); setModal(false); setEditingApp(null); navigate("My Stack"); flash(`${saved.name} was ${editingApp ? "updated" : "added to your stack"}.`); } catch (error) { flash(error instanceof Error ? error.message : "Unable to save app."); } }} />}
       {smartUpload && <SmartUploadModal onClose={() => setSmartUpload(false)} onImport={async (candidates) => { const response = await fetch("/api/apps/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ apps: candidates }) }); const body = await response.json() as { apps?: AppItem[]; imported?: number; skipped?: number; error?: string }; if (!response.ok) throw new Error(body.error ?? "Import failed."); setApps(body.apps ?? []); setSmartUpload(false); flash(`${body.imported ?? 0} enriched app${body.imported === 1 ? "" : "s"} added${body.skipped ? ` · ${body.skipped} skipped` : ""}.`); }} />}
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
     </main>
@@ -355,8 +390,24 @@ function AppDetail({ app, onAction, onEdit, onDelete }: { app: AppItem; onAction
   </div>;
 }
 
-function ProjectsView({ onOpenApp, onMap }: { onOpenApp: (name: string) => void; onMap: () => void }) {
-  return <div><div className="projects-summary"><span>4 projects</span><span>28 active services</span><span>$486 estimated monthly</span><button>＋ New Project</button></div><section className="project-grid">{projectData.map((project) => <article className="project-card" key={project.name}><div className={`project-monogram project-${project.accent}`}>{project.name[0]}</div><div className="project-title"><div><span className="eyebrow">Updated {project.updated}</span><h2>{project.name}</h2><p>{project.description}</p></div><button>•••</button></div><div className="project-stats"><div><strong>{project.tools}</strong><span>Tools</span></div><div><strong>${project.cost}</strong><span>Monthly</span></div><div><strong>{project.active}</strong><span>Active</span></div></div><div className="tool-stack">{project.appNames.slice(0,5).map((name, i) => <button key={name} onClick={() => onOpenApp(name)} aria-label={`Open ${name}`} style={{ zIndex: 10 - i }}><Logo item={{ name, initials: name.slice(0,2), tone: "ink" }} small /></button>)}<span>{project.appNames.length} connected tools</span></div><button className="project-open" onClick={project.name === "Rally" ? onMap : undefined}>Open project <span>→</span></button></article>)}</section></div>;
+function ProjectsView({ projects, apps, onOpenApp, onNew, onEdit, onDelete, onOpenProject }: { projects: Project[]; apps: AppItem[]; onOpenApp: (app: AppItem) => void; onNew: () => void; onEdit: (project: Project) => void; onDelete: (project: Project) => void; onOpenProject: (project: Project) => void }) {
+  const cards = projects.map((project) => {
+    const tools = apps.filter((app) => app.projects.includes(project.name));
+    return { project, tools, active: tools.filter((app) => app.status === "Active").length, cost: tools.reduce((sum, app) => sum + (app.status === "Inactive" ? 0 : app.cost), 0) };
+  });
+  const assigned = new Set(cards.flatMap((card) => card.tools.map((app) => app.id)));
+  const totalCost = apps.filter((app) => assigned.has(app.id) && app.status !== "Inactive").reduce((sum, app) => sum + app.cost, 0);
+  const totalActive = apps.filter((app) => assigned.has(app.id) && app.status === "Active").length;
+  return <div><div className="projects-summary"><span>{projects.length} {projects.length === 1 ? "project" : "projects"}</span><span>{totalActive} active services</span><span>${Math.round(totalCost)} estimated monthly</span><button className="add-button" onClick={onNew}>＋ New Project</button></div>
+    {projects.length === 0 ? <div className="live-empty-state"><span className="empty-orbit">◫</span><span className="eyebrow">Projects</span><h2>Group your tools by what you’re building.</h2><p>Create a project, then assign apps to it from the Add or Edit app form.</p><div><button className="primary-action" onClick={onNew}>＋ Create your first project</button></div></div> :
+    <section className="project-grid">{cards.map(({ project, tools, active, cost }) => <article className="project-card" key={project.id}><div className={`project-monogram project-${project.accent}`}>{project.name[0]}</div><div className="project-title"><div><span className="eyebrow">Updated {formatUpdated(project.updatedAt)}</span><h2>{project.name}</h2><p>{project.description || "No description yet."}</p></div><div className="project-actions"><button type="button" aria-label={`Edit ${project.name}`} onClick={() => onEdit(project)}>✎</button><button type="button" aria-label={`Delete ${project.name}`} onClick={() => onDelete(project)}>×</button></div></div><div className="project-stats"><div><strong>{tools.length}</strong><span>Tools</span></div><div><strong>${Math.round(cost)}</strong><span>Monthly</span></div><div><strong>{active}</strong><span>Active</span></div></div><div className="tool-stack">{tools.slice(0,5).map((app, i) => <button key={app.id} type="button" onClick={() => onOpenApp(app)} aria-label={`Open ${app.name}`} style={{ zIndex: 10 - i }}><Logo item={app} small /></button>)}<span>{tools.length ? `${tools.length} connected ${tools.length === 1 ? "tool" : "tools"}` : "No tools assigned yet"}</span></div><button className="project-open" onClick={() => onOpenProject(project)}>Open project <span>→</span></button></article>)}</section>}</div>;
+}
+
+function ProjectModal({ initialProject, onClose, onSave }: { initialProject: Project | null; onClose: () => void; onSave: (input: { name: string; description: string; accent: Accent }) => Promise<void> }) {
+  useEscape(onClose);
+  const [name, setName] = useState(initialProject?.name ?? ""); const [description, setDescription] = useState(initialProject?.description ?? ""); const [accent, setAccent] = useState<Accent>(initialProject?.accent ?? "cobalt"); const [saving, setSaving] = useState(false);
+  async function submit(e: React.FormEvent) { e.preventDefault(); setSaving(true); try { await onSave({ name: name.trim(), description: description.trim(), accent }); } finally { setSaving(false); } }
+  return <div className="modal-backdrop" onMouseDown={onClose}><form className="add-modal" role="dialog" aria-modal="true" aria-labelledby="project-title" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Projects</span><h2 id="project-title">{initialProject ? "Edit project" : "New project"}</h2><p>Projects group the tools behind something you’re building.</p></div><button type="button" aria-label="Close" onClick={onClose}>×</button></div><label><span>Project name</span><input autoFocus required maxLength={80} value={name} onChange={(e) => setName(e.target.value)} placeholder="Rally" /></label><label><span>Description <em>Optional</em></span><textarea maxLength={300} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this project for?" /></label><fieldset><legend>Color</legend><div className="status-picker four">{ACCENTS.map((value) => <label key={value} className={accent === value ? "active" : ""}><input type="radio" name="accent" value={value} checked={accent === value} onChange={() => setAccent(value)} /><span style={{ textTransform: "capitalize" }}>{value}</span></label>)}</div></fieldset><div className="modal-footer"><button type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={saving}>{saving ? "Saving…" : initialProject ? "Save changes" : "Create project"}</button></div></form></div>;
 }
 
 function MapView({ nodes, setNodes, mode, setMode, dragging, setDragging, onOpen, onAction }: { nodes: typeof mapSeed; setNodes: (nodes: typeof mapSeed) => void; mode: "Project Map" | "Entire Stack"; setMode: (m: "Project Map" | "Entire Stack") => void; dragging: number | null; setDragging: (n: number | null) => void; onOpen: (name: string) => void; onAction: (m: string) => void }) {
@@ -400,7 +451,14 @@ function SubscriptionsView({ apps, onAction }: { apps: AppItem[]; onAction: (m: 
 }
 
 function SavedView({ apps, onOpen, onAdd }: { apps: AppItem[]; onOpen: (app: AppItem) => void; onAdd: () => void }) {
-  return <div><div className="saved-toolbar"><div className="tag-row"><button className="active">All saved <span>31</span></button><button>AI <span>12</span></button><button>Try soon <span>6</span></button><button>Creator tools <span>8</span></button><button>For Rally <span>3</span></button></div><button className="add-button" onClick={onAdd}>＋ Save an app</button></div><div className="saved-grid">{apps.map((app, index) => <button className="saved-card" key={app.id} onClick={() => onOpen(app)}><div className="saved-number">#{String(index + 1).padStart(2,"0")}</div><Logo item={app} /><div><span className="eyebrow">Saved Aug {24-index*3}</span><h2>{app.name}</h2><p>{app.description}</p></div><blockquote>“{app.name === "Lovable" ? "Test this for the next small product prototype." : "Use this for fast, source-backed research and discovery."}”</blockquote><div className="saved-footer"><span>{app.category}</span><em>{app.projects[0] || "No project"}</em><b>Open →</b></div></button>)}</div></div>;
+  const [tag, setTag] = useState("All saved");
+  const counts = new Map<string, number>();
+  for (const app of apps) counts.set(app.category, (counts.get(app.category) ?? 0) + 1);
+  const tags = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const visible = tag === "All saved" ? apps : apps.filter((app) => app.category === tag);
+  return <div><div className="saved-toolbar"><div className="tag-row"><button className={tag === "All saved" ? "active" : ""} onClick={() => setTag("All saved")}>All saved <span>{apps.length}</span></button>{tags.map(([category, count]) => <button key={category} className={tag === category ? "active" : ""} onClick={() => setTag(category)}>{category} <span>{count}</span></button>)}</div><button className="add-button" onClick={onAdd}>＋ Save an app</button></div>
+    {apps.length === 0 ? <EmptyState title="Nothing saved yet." text="Add an app with the Saved status to keep it on your radar." /> : visible.length === 0 ? <EmptyState title="No saved apps in that category." text="Pick another tag or save a new app." /> :
+    <div className="saved-grid">{visible.map((app, index) => <button className="saved-card" key={app.id} onClick={() => onOpen(app)}><div className="saved-number">#{String(index + 1).padStart(2,"0")}</div><Logo item={app} /><div><span className="eyebrow">{app.last}</span><h2>{app.name}</h2><p>{app.description}</p></div>{app.notes ? <blockquote>“{app.notes}”</blockquote> : <blockquote>Add a note to remember why you saved this.</blockquote>}<div className="saved-footer"><span>{app.category}</span><em>{app.projects[0] || "No project"}</em><b>Open →</b></div></button>)}</div>}</div>;
 }
 
 function InboxView({ onAction }: { count: number; setCount: (n: number) => void; onAction: (m: string) => void }) {
@@ -430,11 +488,11 @@ function SmartUploadModal({ onClose, onImport }: { onClose: () => void; onImport
   return <div className="modal-backdrop" onMouseDown={onClose}><section className="smart-upload-modal" role="dialog" aria-modal="true" aria-labelledby="smart-upload-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Website-powered enrichment</span><h2 id="smart-upload-title">Smart upload tools</h2><p>Paste one tool per line. Use <b>Company | website.com</b> for the most accurate result.</p></div><button type="button" aria-label="Close" onClick={onClose}>×</button></div>{!candidates.length ? <><label className="bulk-entry"><span>Apps or official websites</span><textarea autoFocus value={entries} onChange={(event) => setEntries(event.target.value)} placeholder={"Figma | figma.com\nNotion | notion.so\nopenai.com"} /></label><div className="upload-explainer"><span>1</span><p><b>Stackd visits each official website</b> to pull its company name, summary, canonical domain, and logo.</p><span>2</span><p><b>A category is suggested</b> from the company’s own description. Every result starts as Needs Review.</p></div></> : <div className="enrichment-results"><div className="enrichment-summary"><strong>{candidates.length} tools ready to review</strong><span>{candidates.filter((candidate) => candidate.error).length} need manual attention</span></div>{candidates.map((candidate, index) => <article className={`enrichment-row ${candidate.error ? "has-warning" : ""}`} key={candidate.input}><input type="checkbox" checked={selected.has(index)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(index)) next.delete(index); else next.add(index); return next; })} aria-label={`Import ${candidate.name}`} /><Logo item={candidate} small /><div className="enrichment-fields"><div><input value={candidate.name} onChange={(event) => update(index, { name: event.target.value })} aria-label="Company name" /><select value={candidate.category} onChange={(event) => update(index, { category: event.target.value })}>{["AI","Development","Design","Productivity","Marketing","Analytics","Finance","Infrastructure","Research","Other"].map((category) => <option key={category}>{category}</option>)}</select></div><input value={candidate.website ?? ""} onChange={(event) => update(index, { website: event.target.value })} placeholder="official website" aria-label="Official website" /><textarea value={candidate.description} onChange={(event) => update(index, { description: event.target.value })} placeholder="Company summary" aria-label="Company summary" />{candidate.error && <small>⚠ {candidate.error}</small>}</div></article>)}</div>}{error && <p className="modal-error">{error}</p>}<div className="modal-footer"><button type="button" onClick={candidates.length ? () => { setCandidates([]); setError(""); } : onClose}>{candidates.length ? "← Back" : "Cancel"}</button>{candidates.length ? <button className="primary-action" type="button" disabled={working || selected.size === 0} onClick={() => void save()}>{working ? "Adding…" : `Add ${selected.size} to Stack`}</button> : <button className="primary-action" type="button" disabled={working || !entries.trim()} onClick={() => void enrich()}>{working ? "Pulling company info…" : "Review enriched tools →"}</button>}</div></section></div>;
 }
 
-function AddAppModal({ initialApp, onClose, onAdd }: { initialApp: AppItem | null; onClose: () => void; onAdd: (app: AppItem) => Promise<void> }) {
+function AddAppModal({ projectNames, initialApp, onClose, onAdd }: { projectNames: string[]; initialApp: AppItem | null; onClose: () => void; onAdd: (app: AppItem) => Promise<void> }) {
   useEscape(onClose);
   const [name, setName] = useState(initialApp?.name ?? ""); const [website, setWebsite] = useState(initialApp?.website ?? ""); const [category, setCategory] = useState(initialApp?.category ?? "Other"); const [status, setStatus] = useState<Status>(initialApp?.status ?? "Active"); const [project, setProject] = useState(initialApp?.projects[0] ?? "No project"); const [cost, setCost] = useState(initialApp?.cost ? String(initialApp.cost) : ""); const [billingFrequency, setBillingFrequency] = useState(initialApp?.billingFrequency ?? "Monthly"); const [renewalDate, setRenewalDate] = useState(initialApp?.renewalDate ?? ""); const [trialEndDate, setTrialEndDate] = useState(initialApp?.trialEndDate ?? ""); const [cancellationDate, setCancellationDate] = useState(initialApp?.cancellationDate ?? ""); const [accessEndDate, setAccessEndDate] = useState(initialApp?.accessEndDate ?? ""); const [notes, setNotes] = useState(initialApp?.notes ?? ""); const [saving, setSaving] = useState(false);
   async function submit(e: React.FormEvent) { e.preventDefault(); setSaving(true); try { const display = name.trim(); await onAdd({ id: initialApp?.id ?? "", name: display, initials: initialApp?.initials ?? display.slice(0,2).toUpperCase(), tone: initialApp?.tone ?? "blue", description: initialApp?.description ?? "Manually added software tool", category, status, cost: Number(cost) || 0, billingFrequency, renewalDate: renewalDate || undefined, trialEndDate: trialEndDate || undefined, cancellationDate: cancellationDate || undefined, accessEndDate: accessEndDate || undefined, projects: project === "No project" ? [] : [project], sources: initialApp?.sources ?? ["Manual"], last: initialApp?.last ?? "Just now", confidence: initialApp?.confidence ?? 100, website: website.replace(/^https?:\/\//, ""), notes }); } finally { setSaving(false); } }
-  return <div className="modal-backdrop" onMouseDown={onClose}><form className="add-modal" role="dialog" aria-modal="true" aria-labelledby="add-app-title" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Live library</span><h2 id="add-app-title">{initialApp ? "Edit app" : "Add an app"}</h2><p>Save billing, status, and project details to your private Stackd library.</p></div><button type="button" aria-label="Close" onClick={onClose}>×</button></div><div className="form-split equal"><label><span>App name</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="Arcade" /></label><label><span>Official website</span><input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="arcade.software" /></label></div><div className="form-split equal"><label><span>Category</span><select value={category} onChange={(e) => setCategory(e.target.value)}>{categories.map((value) => <option key={value}>{value}</option>)}</select></label><label><span>Assign to project</span><select value={project} onChange={(e) => setProject(e.target.value)}><option>No project</option>{projectData.map((p) => <option key={p.name}>{p.name}</option>)}</select></label></div><fieldset><legend>Status</legend><div className="status-picker five">{(["Active","Trialing","Saved","Inactive","Needs Review"] as Status[]).map((v) => <label key={v} className={status === v ? "active" : ""}><input type="radio" name="status" value={v} checked={status === v} onChange={() => setStatus(v)} /><span>{v}</span></label>)}</div></fieldset><div className="form-split thirds"><label><span>Monthly cost</span><div className="cost-field">$<input type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0" /></div></label><label><span>Billing</span><select value={billingFrequency} onChange={(e) => setBillingFrequency(e.target.value)}><option>Monthly</option><option>Annual</option><option>Usage-based</option><option>Free</option></select></label><label><span>{status === "Trialing" ? "Trial ends" : "Renews"}</span><input type="date" value={status === "Trialing" ? trialEndDate : renewalDate} onChange={(e) => status === "Trialing" ? setTrialEndDate(e.target.value) : setRenewalDate(e.target.value)} /></label></div>{status === "Inactive" && <div className="form-split equal"><label><span>Canceled</span><input type="date" value={cancellationDate} onChange={(e) => setCancellationDate(e.target.value)} /></label><label><span>Access ended</span><input type="date" value={accessEndDate} onChange={(e) => setAccessEndDate(e.target.value)} /></label></div>}<label><span>Notes <em>Optional</em></span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Plan details, cancellation notes, or why this app matters." /></label><div className="modal-footer"><button type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={saving}>{saving ? "Saving…" : initialApp ? "Save changes" : "Add to Stack"}</button></div></form></div>;
+  return <div className="modal-backdrop" onMouseDown={onClose}><form className="add-modal" role="dialog" aria-modal="true" aria-labelledby="add-app-title" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Live library</span><h2 id="add-app-title">{initialApp ? "Edit app" : "Add an app"}</h2><p>Save billing, status, and project details to your private Stackd library.</p></div><button type="button" aria-label="Close" onClick={onClose}>×</button></div><div className="form-split equal"><label><span>App name</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="Arcade" /></label><label><span>Official website</span><input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="arcade.software" /></label></div><div className="form-split equal"><label><span>Category</span><select value={category} onChange={(e) => setCategory(e.target.value)}>{categories.map((value) => <option key={value}>{value}</option>)}</select></label><label><span>Assign to project</span><select value={project} onChange={(e) => setProject(e.target.value)}><option>No project</option>{projectNames.map((p) => <option key={p}>{p}</option>)}</select></label></div><fieldset><legend>Status</legend><div className="status-picker five">{(["Active","Trialing","Saved","Inactive","Needs Review"] as Status[]).map((v) => <label key={v} className={status === v ? "active" : ""}><input type="radio" name="status" value={v} checked={status === v} onChange={() => setStatus(v)} /><span>{v}</span></label>)}</div></fieldset><div className="form-split thirds"><label><span>Monthly cost</span><div className="cost-field">$<input type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0" /></div></label><label><span>Billing</span><select value={billingFrequency} onChange={(e) => setBillingFrequency(e.target.value)}><option>Monthly</option><option>Annual</option><option>Usage-based</option><option>Free</option></select></label><label><span>{status === "Trialing" ? "Trial ends" : "Renews"}</span><input type="date" value={status === "Trialing" ? trialEndDate : renewalDate} onChange={(e) => status === "Trialing" ? setTrialEndDate(e.target.value) : setRenewalDate(e.target.value)} /></label></div>{status === "Inactive" && <div className="form-split equal"><label><span>Canceled</span><input type="date" value={cancellationDate} onChange={(e) => setCancellationDate(e.target.value)} /></label><label><span>Access ended</span><input type="date" value={accessEndDate} onChange={(e) => setAccessEndDate(e.target.value)} /></label></div>}<label><span>Notes <em>Optional</em></span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Plan details, cancellation notes, or why this app matters." /></label><div className="modal-footer"><button type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={saving}>{saving ? "Saving…" : initialApp ? "Save changes" : "Add to Stack"}</button></div></form></div>;
 }
 
 function parseCsvRow(line: string) {
