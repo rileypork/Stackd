@@ -30,3 +30,15 @@ export const userApps = sqliteTable("user_apps", {
   index("user_apps_user_status_idx").on(table.userEmail, table.status),
   index("user_apps_user_updated_idx").on(table.userEmail, table.updatedAt),
 ]);
+
+export const userProjects = sqliteTable("user_projects", {
+  id: text("id").primaryKey(),
+  userEmail: text("user_email").notNull(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  accent: text("accent").notNull().default("cobalt"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("user_projects_user_name_unique").on(table.userEmail, table.name),
+]);
