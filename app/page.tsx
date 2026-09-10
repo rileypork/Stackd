@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { STATUSES, isStatus, type Status } from "./api/apps/payload";
 import { ACCENTS, type Accent, type Project } from "./api/projects/payload";
+import { INTERVALS, SUB_STATUSES, daysUntil, monthlyCost, type Interval, type SubStatus, type Subscription } from "./api/subscriptions/payload";
 
 type SortKey = "Recently updated" | "Cost high to low" | "Alphabetical" | "Trial expiration";
 const sortKeys: SortKey[] = ["Recently updated", "Cost high to low", "Alphabetical", "Trial expiration"];
@@ -97,6 +98,7 @@ export default function StackdApp() {
   const [apps, setApps] = useState<AppItem[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectModal, setProjectModal] = useState<{ open: boolean; project: Project | null }>({ open: false, project: null });
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [dataReady, setDataReady] = useState(false);
   const [dataError, setDataError] = useState("");
   const [selectedApp, setSelectedApp] = useState<AppItem | null>(null);
@@ -147,6 +149,15 @@ export default function StackdApp() {
     fetch("/api/projects")
       .then((response) => response.ok ? response.json() as Promise<{ projects?: Project[] }> : null)
       .then((body) => { if (active && body?.projects) setProjects(body.projects); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/subscriptions")
+      .then((response) => response.ok ? response.json() as Promise<{ subscriptions?: Subscription[] }> : null)
+      .then((body) => { if (active && body?.subscriptions) setSubscriptions(body.subscriptions); })
       .catch(() => {});
     return () => { active = false; };
   }, []);
@@ -294,7 +305,7 @@ export default function StackdApp() {
       <aside className="sidebar">
         <button className="brand" onClick={() => navigate("Home")} aria-label="Stackd home"><span className="brand-mark">s</span><span>stackd</span><i>private beta</i></button>
         <nav className="primary-nav" aria-label="Primary navigation">
-          {nav.map((item) => { const liveCount = item.label === "My Stack" ? apps.length : item.label === "Subscriptions" ? apps.filter((app) => app.cost > 0).length : item.label === "Trials" ? apps.filter((app) => app.status === "Trialing").length : item.label === "Saved" ? apps.filter((app) => app.status === "Saved").length : item.label === "Inbox" ? inboxCount : item.label === "Projects" ? new Set(apps.flatMap((app) => app.projects)).size : undefined; return <button key={item.label} className={view === item.label && !selectedApp ? "active" : ""} onClick={() => navigate(item.label)}><span className="nav-glyph">{item.glyph}</span><span>{item.label === "Inbox" ? "Inbox / Discoveries" : item.label}</span>{liveCount !== undefined && <em>{liveCount}</em>}</button>; })}
+          {nav.map((item) => { const liveCount = item.label === "My Stack" ? apps.length : item.label === "Subscriptions" ? subscriptions.filter((sub) => sub.status === "active" || sub.status === "trialing").length + apps.filter((app) => app.cost > 0 && app.status !== "Inactive" && !subscriptions.some((sub) => sub.appId === app.id)).length : item.label === "Trials" ? apps.filter((app) => app.status === "Trialing").length : item.label === "Saved" ? apps.filter((app) => app.status === "Saved").length : item.label === "Inbox" ? inboxCount : item.label === "Projects" ? new Set(apps.flatMap((app) => app.projects)).size : undefined; return <button key={item.label} className={view === item.label && !selectedApp ? "active" : ""} onClick={() => navigate(item.label)}><span className="nav-glyph">{item.glyph}</span><span>{item.label === "Inbox" ? "Inbox / Discoveries" : item.label}</span>{liveCount !== undefined && <em>{liveCount}</em>}</button>; })}
         </nav>
         <div className="nav-divider" />
         <button className={`ask-nav ${view === "Ask Stackd" ? "active" : ""}`} onClick={() => navigate("Ask Stackd")}><span className="spark">✦</span><span>Ask Stackd</span><kbd>⌘ K</kbd></button>
@@ -323,7 +334,7 @@ export default function StackdApp() {
             {view === "Projects" && <ProjectsView projects={projects} apps={apps} onOpenApp={openApp} onNew={() => setProjectModal({ open: true, project: null })} onEdit={(project) => setProjectModal({ open: true, project })} onDelete={async (project) => { try { await deleteProject(project); } catch (error) { flash(error instanceof Error ? error.message : "Unable to delete project."); } }} onOpenProject={(project) => { clearFilters(); setSearch(project.name); navigate("My Stack"); }} />}
             {view === "Stack Map" && <MapView nodes={mapNodes} setNodes={setMapNodes} mode={mapMode} setMode={setMapMode} dragging={dragging} setDragging={setDragging} onOpen={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onAction={flash} />}
             {view === "Trials" && <TrialsView apps={apps} onAction={flash} />}
-            {view === "Subscriptions" && <SubscriptionsView apps={apps} onAction={flash} />}
+            {view === "Subscriptions" && <SubscriptionsView apps={apps} projects={projects} subscriptions={subscriptions} setSubscriptions={setSubscriptions} onAction={flash} onOpenApp={openApp} />}
             {view === "Saved" && <SavedView apps={apps.filter((a) => a.status === "Saved")} onOpen={openApp} onAdd={() => { setEditingApp(null); setModal(true); }} />}
             {view === "Inbox" && <InboxView count={inboxCount} setCount={setInboxCount} onAction={flash} />}
             {view === "Ask Stackd" && <AskView chat={chat} input={chatInput} setInput={setChatInput} ask={ask} />}
@@ -430,24 +441,153 @@ function TrialsView({ apps, onAction }: { apps: AppItem[]; onAction: (m: string)
   return <div className="trials-page"><div className="trial-overview"><div><strong>${potential.toFixed(0)}</strong><span>Potential monthly spend</span></div><div><strong>{trials.length}</strong><span>Tracked trials</span></div><div><strong>{trials.filter((app) => app.trialEndDate).length}</strong><span>With an end date</span></div><div className="calendar-mini"><span>LIVE</span><b>Your data</b><i>No simulated trials</i></div></div><section className="trial-group"><div className="section-heading compact"><div><span className="eyebrow">{trials.length} trials</span><h2>Current trials</h2></div></div><div className="trial-card-list">{trials.map((trial) => <article className="trial-card" key={trial.id}><Logo item={trial} /><div className="trial-main"><h3>{trial.name}</h3><span>{trial.last}</span></div><div><span className="eyebrow">Trial ends</span><strong>{trial.trialEndDate || "Not set"}</strong><small>Saved record</small></div><div><span className="eyebrow">After trial</span><strong>${trial.cost}/mo</strong><small>{trial.billingFrequency || "Monthly"}</small></div><div className="trial-actions"><button onClick={() => onAction(`Open ${trial.name} from My Stack to update its status.`)}>Manage</button></div></article>)}{!trials.length && <EmptyState title="No trials tracked yet." text="Add an app with Trialing status and an optional end date." />}</div></section></div>;
 }
 
-function SubscriptionsView({ apps, onAction }: { apps: AppItem[]; onAction: (m: string) => void }) {
+type SubRow = { key: string; subscription: Subscription | null; app: AppItem | null; name: string; initials: string; tone: string; website?: string; monthly: number; cost: number; interval: Interval; status: SubStatus; renewal: string | null; trialEnd: string | null; cancelUrl: string | null; projectLabel: string; category: string; signalCount: number };
+
+const SAMPLE_EMAILS = [
+  { id: "sample-notion", from: '"Notion Team" <billing@mail.notion.so>', subject: "Your Notion receipt", date: new Date().toISOString(), body: "Thanks for your payment of $10.00 for the Plus plan. Your subscription renews on " + new Date(Date.now() + 9 * 86_400_000).toDateString() + " and is billed monthly. Manage or cancel anytime: https://www.notion.so/my-account/billing" },
+  { id: "sample-figma", from: "Figma <no-reply@figma.com>", subject: "Your free trial ends in 5 days", date: new Date().toISOString(), body: "After your trial ends you'll be charged $144.00 per year for the Professional plan. Cancel: https://www.figma.com/settings/billing" },
+  { id: "sample-openai", from: "OpenAI <noreply@tm.openai.com>", subject: "Your ChatGPT Plus subscription renews soon", date: new Date().toISOString(), body: "Your ChatGPT Plus subscription will be charged $20.00 on " + new Date(Date.now() + 25 * 86_400_000).toDateString() + ". Billed monthly. Manage subscription: https://chat.openai.com/#settings/subscription" },
+  { id: "sample-spotify", from: "Spotify <no-reply@spotify.com>", subject: "Your Premium subscription has been canceled", date: new Date().toISOString(), body: "We're sorry to see you go. Your Premium plan ($10.99 per month) is canceled." },
+];
+
+function SubscriptionsView({ apps, projects, subscriptions, setSubscriptions, onAction, onOpenApp }: { apps: AppItem[]; projects: Project[]; subscriptions: Subscription[]; setSubscriptions: (next: Subscription[]) => void; onAction: (m: string) => void; onOpenApp: (app: AppItem) => void }) {
   const [tab, setTab] = useState<"Active" | "Inactive">("Active");
   const [query, setQuery] = useState("");
-  const paidApps = apps.filter((item) => item.cost > 0);
-  const activeItems = paidApps.filter((item) => item.status !== "Inactive");
-  const inactiveItems = paidApps.filter((item) => item.status === "Inactive");
-  const items = (tab === "Active" ? activeItems : inactiveItems).filter((item) => item.name.toLowerCase().includes(query.toLowerCase()));
-  const activeSpend = activeItems.reduce((sum, item) => sum + item.cost, 0);
-  const formerSpend = inactiveItems.reduce((sum, item) => sum + item.cost, 0);
-  const nextRenewal = activeItems.find((item) => item.renewalDate);
+  const [sort, setSort] = useState<"Renewal date" | "Cost high to low" | "Alphabetical" | "Recently detected">("Renewal date");
+  const [ingestOpen, setIngestOpen] = useState(false);
+  const [editing, setEditing] = useState<Subscription | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const linkedAppIds = new Set(subscriptions.map((sub) => sub.appId).filter(Boolean));
+  const rows: SubRow[] = [
+    ...subscriptions.map((sub): SubRow => {
+      const app = sub.appId ? apps.find((a) => String(a.id) === sub.appId) ?? null : null;
+      const project = sub.projectId ? projects.find((p) => p.id === sub.projectId) : null;
+      return { key: `sub-${sub.id}`, subscription: sub, app, name: sub.serviceName, initials: (app?.initials ?? sub.serviceName.slice(0, 2)).toUpperCase(), tone: app?.tone ?? "ink", website: app?.website ?? (sub.domain ? `https://${sub.domain}` : undefined), monthly: sub.status === "canceled" || sub.status === "paused" ? 0 : monthlyCost(sub.cost, sub.billingInterval), cost: sub.cost, interval: sub.billingInterval, status: sub.status, renewal: sub.nextRenewalDate, trialEnd: sub.trialEndDate, cancelUrl: sub.cancelUrl, projectLabel: project?.name ?? app?.projects[0] ?? "Unassigned", category: sub.category, signalCount: sub.signalCount };
+    }),
+    ...apps.filter((app) => app.cost > 0 && !linkedAppIds.has(String(app.id))).map((app): SubRow => ({ key: `app-${app.id}`, subscription: null, app, name: app.name, initials: app.initials, tone: app.tone, website: app.website, monthly: app.status === "Inactive" ? 0 : app.cost, cost: app.cost, interval: "monthly", status: app.status === "Inactive" ? "canceled" : app.status === "Trialing" ? "trialing" : "active", renewal: app.renewalDate || null, trialEnd: app.trialEndDate || null, cancelUrl: null, projectLabel: app.projects[0] ?? "Unassigned", category: app.category, signalCount: 0 })),
+  ];
+  const activeRows = rows.filter((row) => row.status === "active" || row.status === "trialing");
+  const inactiveRows = rows.filter((row) => row.status === "canceled" || row.status === "paused");
+  const burn = activeRows.reduce((sum, row) => sum + row.monthly, 0);
+  const formerBurn = inactiveRows.reduce((sum, row) => sum + monthlyCost(row.cost, row.interval), 0);
+  const upcoming = (days: number) => activeRows.filter((row) => { const d = daysUntil(row.renewal); return d !== null && d >= 0 && d <= days; });
+  const due7 = upcoming(7), due14 = upcoming(14), due30 = upcoming(30);
+  const trials = activeRows.filter((row) => row.status === "trialing" || row.trialEnd).map((row) => ({ row, days: daysUntil(row.trialEnd) })).sort((a, b) => (a.days ?? 999) - (b.days ?? 999));
+  const sorted = [...(tab === "Active" ? activeRows : inactiveRows)].filter((row) => `${row.name} ${row.projectLabel} ${row.category}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => {
+    if (sort === "Cost high to low") return b.monthly - a.monthly;
+    if (sort === "Alphabetical") return a.name.localeCompare(b.name);
+    if (sort === "Recently detected") return (b.subscription?.lastDetectedAt ?? "").localeCompare(a.subscription?.lastDetectedAt ?? "");
+    return (a.renewal ?? "9999").localeCompare(b.renewal ?? "9999");
+  });
+
+  async function ingest(messages: unknown[]) {
+    setBusy(true);
+    try {
+      const response = await fetch("/api/gmail/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messages }) });
+      const body = await response.json() as { error?: string; subscriptions?: Subscription[]; results?: { outcome: string }[] };
+      if (!response.ok) throw new Error(body.error ?? "Ingest failed.");
+      if (body.subscriptions) setSubscriptions(body.subscriptions);
+      const tally = (body.results ?? []).reduce<Record<string, number>>((acc, r) => { acc[r.outcome] = (acc[r.outcome] ?? 0) + 1; return acc; }, {});
+      onAction(`Parsed ${body.results?.length ?? 0} emails · ${tally.created ?? 0} new · ${tally.updated ?? 0} updated · ${tally.duplicate ?? 0} duplicate · ${tally.skipped ?? 0} skipped. Raw bodies were discarded.`);
+    } catch (error) { onAction(error instanceof Error ? error.message : "Ingest failed."); } finally { setBusy(false); }
+  }
+  async function save(id: string | null, patch: Record<string, unknown>) {
+    const response = await fetch(id ? `/api/subscriptions/${id}` : "/api/subscriptions", { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+    const body = await response.json() as { error?: string; subscription?: Subscription };
+    if (!response.ok || !body.subscription) throw new Error(body.error ?? "Unable to save subscription.");
+    const saved = body.subscription;
+    setSubscriptions(id ? subscriptions.map((sub) => sub.id === id ? saved : sub) : [...subscriptions, saved]);
+    return saved;
+  }
+  async function remove(sub: Subscription) {
+    if (!window.confirm(`Remove ${sub.serviceName} and its ${sub.signalCount} signal${sub.signalCount === 1 ? "" : "s"}?`)) return;
+    const response = await fetch(`/api/subscriptions/${sub.id}`, { method: "DELETE" });
+    if (!response.ok) { onAction("Unable to remove subscription."); return; }
+    setSubscriptions(subscriptions.filter((s) => s.id !== sub.id));
+    onAction(`${sub.serviceName} removed.`);
+  }
+
+  const countdown = (days: number | null) => days === null ? "—" : days < 0 ? `${Math.abs(days)}d ago` : days === 0 ? "today" : `${days}d`;
 
   return <div className="subscriptions-page">
-    <section className="subscription-ledger"><div><span className="eyebrow">Current commitment</span><strong>${activeSpend.toFixed(0)}<small>/mo</small></strong><p>Across {activeItems.length} paid subscriptions</p></div><div><span className="eyebrow">Inactive history</span><strong>{inactiveItems.length}</strong><p>${formerSpend.toFixed(0)} in former monthly spend</p></div><div><span className="eyebrow">Annualized savings</span><strong>${(formerSpend * 12).toFixed(0)}</strong><p>Based on inactive monthly costs</p></div><div><span className="eyebrow">Next renewal</span><strong>{nextRenewal?.renewalDate || "—"}</strong><p>{nextRenewal ? `${nextRenewal.name} · $${nextRenewal.cost}/month` : "Add a renewal date"}</p></div></section>
-    <div className="subscription-toolbar"><div className="segmented"><button className={tab === "Active" ? "active" : ""} onClick={() => setTab("Active")}>Active <span>{activeItems.length}</span></button><button className={tab === "Inactive" ? "active" : ""} onClick={() => setTab("Inactive")}>Inactive <span>{inactiveItems.length}</span></button></div><label className="subscription-search">⌕<input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${tab.toLowerCase()} subscriptions`} /></label><select aria-label="Sort subscriptions"><option>Recently updated</option><option>Cost high to low</option><option>Alphabetical</option>{tab === "Active" ? <option>Renewal date</option> : <option>Cancellation date</option>}</select></div>
-    {tab === "Inactive" && <div className="inactive-callout"><span>✓</span><div><strong>Inactive subscriptions are excluded from current spend.</strong><p>Stackd keeps their history so you remember what you tried, what it cost, and when access ended.</p></div><b>${formerSpend.toFixed(0)}/mo former spend</b></div>}
-    <section className="subscription-table"><div className="subscription-header"><span>Subscription</span><span>{tab === "Active" ? "Next renewal" : "Canceled"}</span><span>Billing</span><span>{tab === "Active" ? "Signal" : "Access"}</span><span>Cost</span><span /></div>{items.map((item) => <article className={`subscription-row ${tab === "Inactive" ? "is-inactive" : ""}`} key={item.id}><div className="subscription-name"><Logo item={item} small /><div><strong>{item.name}</strong><span>{item.projects.join(", ") || "Unassigned"} · {item.billingFrequency || "Monthly"}</span></div></div><div><strong>{tab === "Active" ? item.renewalDate || "Not set" : item.cancellationDate || "Not set"}</strong><span>{tab === "Active" ? "Renewal" : "Cancellation"}</span></div><div><strong>{item.billingFrequency || "Monthly"}</strong><span>From Gmail evidence</span></div><div><strong>{tab === "Active" ? item.last : item.accessEndDate || "Ended"}</strong><span>{tab === "Active" ? "Latest email signal" : item.last}</span></div><div className="subscription-cost"><strong>${item.cost}</strong><span>/month</span></div><div className="subscription-actions">{tab === "Active" ? <button onClick={() => onAction(`Open ${item.name} to review Gmail billing evidence.`)}>Evidence</button> : <button onClick={() => onAction(`Open ${item.name} and change its status to reactivate it.`)}>Reactivate</button>}</div></article>)}{items.length === 0 && <EmptyState title={tab === "Active" ? "No active paid subscriptions yet." : "No inactive subscriptions yet."} text="Connect Gmail or add an app manually to start tracking it." />}</section>
-    {tab === "Inactive" && <section className="subscription-footnote"><div><span className="eyebrow">Historical context</span><h2>Inactive doesn’t mean forgotten.</h2></div><p>Former subscriptions stay linked to their projects, notes, evidence, and prior costs—without being counted toward current monthly spend.</p></section>}
+    <section className="subscription-ledger" aria-label="Subscription summary">
+      <div><span className="eyebrow">Monthly burn rate</span><strong>${burn.toFixed(0)}<small>/mo</small></strong><p>{activeRows.length} active · annualized ${(burn * 12).toFixed(0)}</p></div>
+      <div><span className="eyebrow">Renewing soon</span><strong className="mono-stat"><b>{due7.length}</b><i>7d</i><b>{due14.length}</b><i>14d</i><b>{due30.length}</b><i>30d</i></strong><p>${due30.reduce((s, r) => s + r.cost, 0).toFixed(0)} due in the next 30 days</p></div>
+      <div><span className="eyebrow">Trials</span><strong>{trials.length}</strong><p>{trials[0]?.days != null ? `Next ends ${countdown(trials[0].days)} · ${trials[0].row.name}` : "No trial end dates"}</p></div>
+      <div><span className="eyebrow">Former spend</span><strong>${formerBurn.toFixed(0)}<small>/mo</small></strong><p>{inactiveRows.length} canceled · ${(formerBurn * 12).toFixed(0)}/yr saved</p></div>
+    </section>
+
+    {(due30.length > 0 || trials.length > 0) && <section className="signal-strip" aria-label="Upcoming renewals and trials">
+      <div className="signal-column"><span className="eyebrow">Upcoming renewals</span>{due30.length === 0 ? <p className="signal-empty">Nothing renews in the next 30 days.</p> : due30.sort((a, b) => (a.renewal ?? "").localeCompare(b.renewal ?? "")).map((row) => { const d = daysUntil(row.renewal); return <div className={`signal-item ${d !== null && d <= 7 ? "urgent" : ""}`} key={row.key}><code>{countdown(d)}</code><strong>{row.name}</strong><span>{row.renewal}</span><b>${row.cost.toFixed(2)}</b>{row.cancelUrl && <a href={row.cancelUrl} target="_blank" rel="noreferrer">Cancel ↗</a>}</div>; })}</div>
+      <div className="signal-column"><span className="eyebrow">Trial countdowns</span>{trials.length === 0 ? <p className="signal-empty">No trials tracked.</p> : trials.map(({ row, days }) => <div className={`signal-item ${days !== null && days <= 3 ? "urgent" : ""}`} key={row.key}><code>{countdown(days)}</code><strong>{row.name}</strong><span>{row.trialEnd ?? "No end date"}</span><b>then ${row.cost.toFixed(2)}/{row.interval === "yearly" ? "yr" : "mo"}</b>{row.cancelUrl && <a href={row.cancelUrl} target="_blank" rel="noreferrer">Cancel ↗</a>}</div>)}</div>
+    </section>}
+
+    <div className="subscription-toolbar">
+      <div className="segmented" role="tablist"><button role="tab" aria-selected={tab === "Active"} className={tab === "Active" ? "active" : ""} onClick={() => setTab("Active")}>Active <span>{activeRows.length}</span></button><button role="tab" aria-selected={tab === "Inactive"} className={tab === "Inactive" ? "active" : ""} onClick={() => setTab("Inactive")}>Inactive <span>{inactiveRows.length}</span></button></div>
+      <label className="subscription-search">⌕<input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${tab.toLowerCase()} subscriptions`} aria-label="Search subscriptions" /></label>
+      <select aria-label="Sort subscriptions" value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}><option>Renewal date</option><option>Cost high to low</option><option>Alphabetical</option><option>Recently detected</option></select>
+      <button className="toolbar-action" onClick={() => setIngestOpen(true)}>Ingest emails</button>
+      <button className="toolbar-action primary" onClick={() => setEditing({ id: "", serviceName: "", domain: null, category: "Other", planName: null, cost: 0, currency: "USD", billingInterval: "monthly", nextRenewalDate: null, trialEndDate: null, cancelUrl: null, status: "active", projectId: null, appId: null, lastDetectedAt: null, signalCount: 0, updatedAt: "" })}>＋ Add</button>
+    </div>
+
+    <section className="subscription-table" aria-label={`${tab} subscriptions`}>
+      <div className="subscription-header"><span>Subscription</span><span>{tab === "Active" ? "Next renewal" : "Status"}</span><span>Billing</span><span>Project · Signals</span><span>Monthly</span><span /></div>
+      {sorted.map((row) => { const d = daysUntil(row.renewal); return <article className={`subscription-row ${tab === "Inactive" ? "is-inactive" : ""}`} key={row.key}>
+        <div className="subscription-name"><Logo item={row} small /><div><strong>{row.name}{row.status === "trialing" && <em className="row-flag">TRIAL</em>}{!row.subscription && <em className="row-flag muted">LIBRARY</em>}</strong><span>{row.category}{row.subscription?.planName ? ` · ${row.subscription.planName}` : ""}</span></div></div>
+        <div><strong>{tab === "Active" ? (row.renewal ?? "Not set") : row.status}</strong><span>{tab === "Active" ? (d === null ? "Add a renewal date" : `in ${countdown(d)}`) : row.subscription?.lastDetectedAt ? `Last signal ${formatUpdated(row.subscription.lastDetectedAt)}` : "From library"}</span></div>
+        <div><strong>{row.subscription?.currency === "USD" || !row.subscription ? "$" : `${row.subscription.currency} `}{row.cost.toFixed(2)} / {row.interval.replace("_", "-")}</strong><span>{row.trialEnd ? `Trial ends ${row.trialEnd}` : row.subscription ? `${row.subscription.currency}` : "Manual entry"}</span></div>
+        <div><strong>{row.projectLabel}</strong><span>{row.signalCount} email signal{row.signalCount === 1 ? "" : "s"}</span></div>
+        <div className="subscription-cost"><strong>${row.monthly.toFixed(0)}</strong><span>/month</span></div>
+        <div className="subscription-actions">{row.cancelUrl && <a className="button-link" href={row.cancelUrl} target="_blank" rel="noreferrer">Cancel ↗</a>}{row.subscription ? <><button onClick={() => setEditing(row.subscription)}>Edit</button><button aria-label={`Remove ${row.name}`} onClick={() => row.subscription && remove(row.subscription)}>✕</button></> : row.app && <button onClick={() => row.app && onOpenApp(row.app)}>Open app</button>}</div>
+      </article>; })}
+      {sorted.length === 0 && <EmptyState title={tab === "Active" ? "No active subscriptions yet." : "No inactive subscriptions."} text={tab === "Active" ? "Ingest billing emails or add one manually to start tracking burn rate." : "Canceled subscriptions will keep their history here."} />}
+    </section>
+
+    {ingestOpen && <IngestModal busy={busy} onClose={() => setIngestOpen(false)} onIngest={async (messages) => { await ingest(messages); setIngestOpen(false); }} onSample={async () => { await ingest(SAMPLE_EMAILS); setIngestOpen(false); }} />}
+    {editing && <SubscriptionModal initial={editing} projects={projects} apps={apps} onClose={() => setEditing(null)} onSave={async (patch) => { try { await save(editing.id || null, patch); onAction(editing.id ? "Subscription updated." : "Subscription added."); setEditing(null); } catch (error) { onAction(error instanceof Error ? error.message : "Unable to save."); } }} />}
   </div>;
+}
+
+function IngestModal({ busy, onClose, onIngest, onSample }: { busy: boolean; onClose: () => void; onIngest: (messages: { from: string; subject: string; date: string; body: string }[]) => Promise<void>; onSample: () => Promise<void> }) {
+  const [from, setFrom] = useState("");
+  const [subject, setSubject] = useState("");
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [body, setBody] = useState("");
+  useEscape(onClose);
+  return <div className="modal-backdrop" onClick={onClose}><form className="add-modal ingest-modal" role="dialog" aria-modal="true" aria-labelledby="ingest-title" onClick={(e) => e.stopPropagation()} onSubmit={async (e) => { e.preventDefault(); await onIngest([{ from, subject, date, body }]); }}>
+    <div className="modal-head"><div><span className="eyebrow">Gmail ingestion</span><h2 id="ingest-title">Parse a billing email</h2></div><button type="button" aria-label="Close" onClick={onClose}>✕</button></div>
+    <p className="modal-note">Stackd extracts the service, price, billing cadence, renewal or trial date and cancel link. The email body is parsed in memory and <b>never stored</b> — only the structured fields and a de-duplication hash are kept.</p>
+    <label><span>From</span><input required value={from} onChange={(e) => setFrom(e.target.value)} placeholder='"Notion Team" <billing@mail.notion.so>' /></label>
+    <label><span>Subject</span><input required value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Your Notion receipt" /></label>
+    <label><span>Received</span><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+    <label><span>Body</span><textarea rows={6} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Paste the email text…" /></label>
+    <div className="modal-footer"><button type="button" onClick={onSample} disabled={busy}>Load 4 sample emails</button><button type="submit" className="primary-action" disabled={busy}>{busy ? "Parsing…" : "Parse & save signal"}</button></div>
+  </form></div>;
+}
+
+function SubscriptionModal({ initial, projects, apps, onClose, onSave }: { initial: Subscription; projects: Project[]; apps: AppItem[]; onClose: () => void; onSave: (patch: Record<string, unknown>) => Promise<void> }) {
+  const [form, setForm] = useState({ serviceName: initial.serviceName, planName: initial.planName ?? "", category: initial.category, cost: String(initial.cost), currency: initial.currency, billingInterval: initial.billingInterval as string, status: initial.status as string, nextRenewalDate: initial.nextRenewalDate ?? "", trialEndDate: initial.trialEndDate ?? "", cancelUrl: initial.cancelUrl ?? "", projectId: initial.projectId ?? "", appId: initial.appId ?? "" });
+  const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [key]: e.target.value }));
+  useEscape(onClose);
+  return <div className="modal-backdrop" onClick={onClose}><form className="add-modal subscription-modal" role="dialog" aria-modal="true" aria-labelledby="sub-title" onClick={(e) => e.stopPropagation()} onSubmit={async (e) => { e.preventDefault(); await onSave({ ...form, planName: form.planName || null, cost: Number(form.cost), nextRenewalDate: form.nextRenewalDate || null, trialEndDate: form.trialEndDate || null, cancelUrl: form.cancelUrl || null, projectId: form.projectId || null, appId: form.appId || null }); }}>
+    <div className="modal-head"><div><span className="eyebrow">{initial.id ? "Edit subscription" : "New subscription"}</span><h2 id="sub-title">{initial.id ? initial.serviceName : "Track a subscription"}</h2></div><button type="button" aria-label="Close" onClick={onClose}>✕</button></div>
+    <div className="form-grid">
+      <label><span>Service</span><input required value={form.serviceName} onChange={set("serviceName")} /></label>
+      <label><span>Plan</span><input value={form.planName} onChange={set("planName")} placeholder="Pro" /></label>
+      <label><span>Category</span><select value={form.category} onChange={set("category")}>{[...new Set([form.category, ...categories])].map((c) => <option key={c}>{c}</option>)}</select></label>
+      <label><span>Status</span><select value={form.status} onChange={set("status")}>{SUB_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+      <label><span>Cost</span><input type="number" min="0" step="0.01" value={form.cost} onChange={set("cost")} /></label>
+      <label><span>Currency</span><input maxLength={3} value={form.currency} onChange={set("currency")} /></label>
+      <label><span>Billing</span><select value={form.billingInterval} onChange={set("billingInterval")}>{INTERVALS.map((i) => <option key={i} value={i}>{i.replace("_", "-")}</option>)}</select></label>
+      <label><span>Next renewal</span><input type="date" value={form.nextRenewalDate} onChange={set("nextRenewalDate")} /></label>
+      <label><span>Trial ends</span><input type="date" value={form.trialEndDate} onChange={set("trialEndDate")} /></label>
+      <label className="span-2"><span>Cancel URL</span><input type="url" value={form.cancelUrl} onChange={set("cancelUrl")} placeholder="https://…/billing" /></label>
+      <label><span>Project</span><select value={form.projectId} onChange={set("projectId")}><option value="">Unassigned</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+      <label><span>Library app</span><select value={form.appId} onChange={set("appId")}><option value="">Not linked</option>{apps.map((a) => <option key={a.id} value={String(a.id)}>{a.name}</option>)}</select></label>
+    </div>
+    <div className="modal-footer"><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary-action">{initial.id ? "Save changes" : "Add subscription"}</button></div>
+  </form></div>;
 }
 
 function SavedView({ apps, onOpen, onAdd }: { apps: AppItem[]; onOpen: (app: AppItem) => void; onAdd: () => void }) {
