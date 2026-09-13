@@ -50,12 +50,16 @@ export async function applySignal(email: string, signal: ParsedSignal): Promise<
   if (!subscriptionId) {
     subscriptionId = crypto.randomUUID();
     created = true;
+    const linkedApp = await db
+      .prepare("SELECT id FROM user_apps WHERE user_email = ? AND (name = ? COLLATE NOCASE OR (? IS NOT NULL AND website LIKE ?)) LIMIT 1")
+      .bind(email, signal.serviceName, signal.senderDomain, signal.senderDomain ? `%${signal.senderDomain}%` : null)
+      .first<{ id: string }>();
     await db.prepare(`INSERT INTO subscriptions (id, user_email, service_name, domain, category, plan_name, cost_cents, currency, billing_interval,
-        next_renewal_date, trial_end_date, cancel_url, status, last_detected_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
+        next_renewal_date, trial_end_date, cancel_url, status, app_id, last_detected_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
       .bind(subscriptionId, email, signal.serviceName, signal.senderDomain, signal.category, signal.planName,
         signal.amountCents ?? 0, signal.currency ?? "USD", signal.billingInterval ?? "monthly",
-        signal.renewalDate, signal.trialEndDate, signal.cancelUrl, statusAfterSignal(signal.kind) ?? "active")
+        signal.renewalDate, signal.trialEndDate, signal.cancelUrl, statusAfterSignal(signal.kind) ?? "active", linkedApp?.id ?? null)
       .run();
   }
 
