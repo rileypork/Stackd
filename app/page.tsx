@@ -58,17 +58,6 @@ function formatUpdated(iso: string) {
   return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
 }
 
-const mapSeed = [
-  { id: 1, name: "GitHub", initials: "GH", tone: "ink", x: 70, y: 80, category: "Source", cost: 0 },
-  { id: 2, name: "Railway", initials: "R", tone: "violet", x: 320, y: 180, category: "Hosts", cost: 34 },
-  { id: 3, name: "Supabase", initials: "S", tone: "mint", x: 595, y: 76, category: "Database", cost: 25 },
-  { id: 4, name: "OpenAI", initials: "◎", tone: "ink", x: 595, y: 250, category: "AI", cost: 42 },
-  { id: 5, name: "Sendblue", initials: "SB", tone: "blue", x: 862, y: 110, category: "Messaging", cost: 42 },
-  { id: 6, name: "Mapbox", initials: "M", tone: "teal", x: 862, y: 280, category: "Maps", cost: 12 },
-  { id: 7, name: "Langfuse", initials: "L", tone: "indigo", x: 595, y: 425, category: "Analytics", cost: 29 },
-];
-
-const mapEdges: [number, number, string][] = [[1,2,"Deploys"],[2,3,"Database"],[2,4,"API"],[2,5,"Messaging"],[2,6,"Maps"],[4,7,"Traces"]];
 
 const brandLogoSlugs: Record<string, string> = {
   OpenAI: "openai", Anthropic: "anthropic", Supabase: "supabase", Railway: "railway", Vercel: "vercel",
@@ -116,9 +105,6 @@ export default function StackdApp() {
   const [inboxCount, setInboxCount] = useState(0);
   const [chat, setChat] = useState<{ role: "user" | "assistant"; text: string }[]>([]);
   const [chatInput, setChatInput] = useState("");
-  const [mapNodes, setMapNodes] = useState(mapSeed);
-  const [mapMode, setMapMode] = useState<"Project Map" | "Entire Stack">("Project Map");
-  const [dragging, setDragging] = useState<number | null>(null);
 
   const dark = useSyncExternalStore(subscribeTheme, readTheme, () => false);
 
@@ -332,7 +318,7 @@ export default function StackdApp() {
             {view === "Home" && <HomeView apps={apps} dataReady={dataReady} dataError={dataError} onNavigate={navigate} onOpenApp={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onDiscover={async (item, status) => { try { const app = await createApp({ id: "", name: item.name, initials: item.initials, tone: item.tone, description: item.detail, category: "Other", status, cost: 0, projects: [], sources: [item.source], last: "Today", confidence: item.confidence }); flash(`${app.name} was added to your stack.`); } catch (error) { flash(error instanceof Error ? error.message : "Unable to add app."); } }} onAction={flash} />}
             {view === "My Stack" && <StackView apps={filtered} allApps={apps} dataReady={dataReady} dataError={dataError} search={search} setSearch={setSearch} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} sort={sort} setSort={setSort} filtersActive={filtersActive} onClearFilters={clearFilters} grid={grid} setGrid={setGrid} onOpen={openApp} onImport={async (file) => { try { await importApps(file); } catch (error) { flash(error instanceof Error ? error.message : "Import failed."); } }} onExport={exportApps} onSmartUpload={() => setSmartUpload(true)} onAdd={() => { setEditingApp(null); setModal(true); }} />}
             {view === "Projects" && <ProjectsView projects={projects} apps={apps} onOpenApp={openApp} onNew={() => setProjectModal({ open: true, project: null })} onEdit={(project) => setProjectModal({ open: true, project })} onDelete={async (project) => { try { await deleteProject(project); } catch (error) { flash(error instanceof Error ? error.message : "Unable to delete project."); } }} onOpenProject={(project) => { clearFilters(); setSearch(project.name); navigate("My Stack"); }} />}
-            {view === "Stack Map" && <MapView nodes={mapNodes} setNodes={setMapNodes} mode={mapMode} setMode={setMapMode} dragging={dragging} setDragging={setDragging} onOpen={(name) => { const app = apps.find((a) => a.name === name); if (app) openApp(app); }} onAction={flash} />}
+            {view === "Stack Map" && <MapView apps={apps} projects={projects} onOpen={openApp} onAction={flash} />}
             {view === "Trials" && <TrialsView apps={apps} onAction={flash} />}
             {view === "Subscriptions" && <SubscriptionsView apps={apps} projects={projects} subscriptions={subscriptions} setSubscriptions={setSubscriptions} onAction={flash} onOpenApp={openApp} />}
             {view === "Saved" && <SavedView apps={apps.filter((a) => a.status === "Saved")} onOpen={openApp} onAdd={() => { setEditingApp(null); setModal(true); }} />}
@@ -421,16 +407,39 @@ function ProjectModal({ initialProject, onClose, onSave }: { initialProject: Pro
   return <div className="modal-backdrop" onMouseDown={onClose}><form className="add-modal" role="dialog" aria-modal="true" aria-labelledby="project-title" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Projects</span><h2 id="project-title">{initialProject ? "Edit project" : "New project"}</h2><p>Projects group the tools behind something you’re building.</p></div><button type="button" aria-label="Close" onClick={onClose}>×</button></div><label><span>Project name</span><input autoFocus required maxLength={80} value={name} onChange={(e) => setName(e.target.value)} placeholder="Rally" /></label><label><span>Description <em>Optional</em></span><textarea maxLength={300} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this project for?" /></label><fieldset><legend>Color</legend><div className="status-picker four">{ACCENTS.map((value) => <label key={value} className={accent === value ? "active" : ""}><input type="radio" name="accent" value={value} checked={accent === value} onChange={() => setAccent(value)} /><span style={{ textTransform: "capitalize" }}>{value}</span></label>)}</div></fieldset><div className="modal-footer"><button type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={saving}>{saving ? "Saving…" : initialProject ? "Save changes" : "Create project"}</button></div></form></div>;
 }
 
-function MapView({ nodes, setNodes, mode, setMode, dragging, setDragging, onOpen, onAction }: { nodes: typeof mapSeed; setNodes: (nodes: typeof mapSeed) => void; mode: "Project Map" | "Entire Stack"; setMode: (m: "Project Map" | "Entire Stack") => void; dragging: number | null; setDragging: (n: number | null) => void; onOpen: (name: string) => void; onAction: (m: string) => void }) {
+type MapNode = { id: string; name: string; initials: string; tone: string; website?: string; category: string; cost: number; x: number; y: number };
+const NODE_W = 152, NODE_H = 72;
+
+function layoutNodes(items: AppItem[]): MapNode[] {
+  const byCategory = new Map<string, AppItem[]>();
+  for (const app of items) byCategory.set(app.category, [...(byCategory.get(app.category) ?? []), app]);
+  const columns = [...byCategory.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  return columns.flatMap(([category, group], col) => group.map((app, row) => ({ id: String(app.id), name: app.name, initials: app.initials, tone: app.tone, website: app.website, category, cost: app.status === "Inactive" ? 0 : app.cost, x: 40 + col * (NODE_W + 90), y: 40 + row * (NODE_H + 46) })));
+}
+
+function MapView({ apps, projects, onOpen, onAction }: { apps: AppItem[]; projects: Project[]; onOpen: (app: AppItem) => void; onAction: (m: string) => void }) {
+  const [mode, setMode] = useState<"Project Map" | "Entire Stack">(projects.length ? "Project Map" : "Entire Stack");
+  const [projectName, setProjectName] = useState(projects[0]?.name ?? "");
   const [zoom, setZoom] = useState(1);
-  function autoLayout() { setNodes(mapSeed); onAction("Rally map arranged by data flow."); }
-  return <div className="map-page"><div className="map-toolbar"><div className="segmented"><button className={mode === "Project Map" ? "active" : ""} onClick={() => setMode("Project Map")}>Project Map</button><button className={mode === "Entire Stack" ? "active" : ""} onClick={() => setMode("Entire Stack")}>Entire Stack</button></div><select aria-label="Select project"><option>Rally</option><option>Object Report</option><option>Personal Tools</option></select><span className="map-meta"><b>7</b> tools · <b>6</b> connections · <b>$184/mo</b></span><div className="map-actions"><button onClick={autoLayout}>⌁ Auto layout</button><button onClick={() => onAction("Click and drag from one tool to another to connect them.")}>＋ Connect</button></div></div>
-    <div className="map-canvas" onPointerMove={(e) => { if (dragging === null) return; const rect = e.currentTarget.getBoundingClientRect(); const x = (e.clientX - rect.left) / zoom - 70; const y = (e.clientY - rect.top) / zoom - 38; setNodes(nodes.map((n) => n.id === dragging ? { ...n, x: Math.max(10, Math.min(970, x)), y: Math.max(10, Math.min(500, y)) } : n)); }} onPointerUp={() => setDragging(null)} onPointerLeave={() => setDragging(null)}>
-      <div className="map-grid" style={{ transform: `scale(${zoom})` }}>
-        {mapEdges.map(([fromId,toId,label]) => { const from = nodes.find((n) => n.id === fromId)!; const to = nodes.find((n) => n.id === toId)!; const x1 = from.x + 76, y1 = from.y + 36, x2 = to.x + 76, y2 = to.y + 36; const length = Math.hypot(x2-x1,y2-y1); const angle = Math.atan2(y2-y1,x2-x1) * 180 / Math.PI; return <div className="edge-wrap" key={`${fromId}-${toId}`} style={{ left: x1, top: y1, width: length, transform: `rotate(${angle}deg)` }}><span className="edge-line" /><i>{label}</i></div>; })}
-        {nodes.map((node) => <button className={`map-node ${dragging === node.id ? "dragging" : ""}`} key={node.id} style={{ left: node.x, top: node.y }} onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setDragging(node.id); }} onDoubleClick={() => onOpen(node.name)}><Logo item={node} small /><span><strong>{node.name}</strong><small>{node.category}</small></span>{node.cost > 0 && <em>${node.cost}</em>}</button>)}
-        <div className="map-note"><span>RALLY · PRODUCTION</span><strong>Drag tools to rearrange</strong><small>Double-click a tool for details.</small></div>
-      </div><div className="zoom-controls"><button onClick={() => setZoom(Math.min(1.2, zoom + .1))}>＋</button><span>{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(Math.max(.7, zoom - .1))}>−</button><button onClick={() => setZoom(1)}>⌖</button></div><div className="map-legend"><span><i className="legend-active" />Active</span><span><i className="legend-edge" />Data flow</span></div>
+  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [dragging, setDragging] = useState<string | null>(null);
+  const scope = mode === "Entire Stack" ? apps : apps.filter((app) => app.projects.includes(projectName));
+  const nodes = layoutNodes(scope).map((node) => ({ ...node, ...(positions[node.id] ?? {}) }));
+  const edges: [MapNode, MapNode, string][] = [];
+  const byCategory = new Map<string, MapNode[]>();
+  for (const node of nodes) byCategory.set(node.category, [...(byCategory.get(node.category) ?? []), node]);
+  const columns = [...byCategory.values()];
+  for (let i = 0; i < columns.length - 1; i++) for (const to of columns[i + 1]) edges.push([columns[i][0], to, to.category]);
+  const monthly = nodes.reduce((sum, node) => sum + node.cost, 0);
+  const width = Math.max(1000, ...nodes.map((n) => n.x + NODE_W + 40)), height = Math.max(520, ...nodes.map((n) => n.y + NODE_H + 40));
+  return <div className="map-page"><div className="map-toolbar"><div className="segmented" role="tablist"><button role="tab" aria-selected={mode === "Project Map"} className={mode === "Project Map" ? "active" : ""} onClick={() => setMode("Project Map")}>Project Map</button><button role="tab" aria-selected={mode === "Entire Stack"} className={mode === "Entire Stack" ? "active" : ""} onClick={() => setMode("Entire Stack")}>Entire Stack</button></div>{mode === "Project Map" && <select aria-label="Select project" value={projectName} onChange={(e) => { setProjectName(e.target.value); setPositions({}); }}>{projects.map((p) => <option key={p.id}>{p.name}</option>)}{!projects.length && <option value="">No projects</option>}</select>}<span className="map-meta"><b>{nodes.length}</b> tools · <b>{edges.length}</b> connections · <b>${monthly.toFixed(0)}/mo</b></span><div className="map-actions"><button onClick={() => { setPositions({}); onAction("Map arranged by category."); }}>⌁ Auto layout</button></div></div>
+    <div className="map-canvas" onPointerMove={(e) => { if (dragging === null) return; const rect = e.currentTarget.getBoundingClientRect(); const x = (e.clientX - rect.left) / zoom - NODE_W / 2; const y = (e.clientY - rect.top) / zoom - NODE_H / 2; setPositions({ ...positions, [dragging]: { x: Math.max(10, x), y: Math.max(10, y) } }); }} onPointerUp={() => setDragging(null)} onPointerLeave={() => setDragging(null)}>
+      <div className="map-grid" style={{ transform: `scale(${zoom})`, width, height }}>
+        {edges.map(([from, to, label]) => { const x1 = from.x + NODE_W / 2, y1 = from.y + NODE_H / 2, x2 = to.x + NODE_W / 2, y2 = to.y + NODE_H / 2; const length = Math.hypot(x2 - x1, y2 - y1); const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI; return <div className="edge-wrap" key={`${from.id}-${to.id}`} style={{ left: x1, top: y1, width: length, transform: `rotate(${angle}deg)` }}><span className="edge-line" /><i>{label}</i></div>; })}
+        {nodes.map((node) => <button className={`map-node ${dragging === node.id ? "dragging" : ""}`} key={node.id} style={{ left: node.x, top: node.y }} onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setDragging(node.id); }} onDoubleClick={() => { const app = apps.find((a) => String(a.id) === node.id); if (app) onOpen(app); }} onKeyDown={(e) => { if (e.key === "Enter") { const app = apps.find((a) => String(a.id) === node.id); if (app) onOpen(app); } }}><Logo item={node} small /><span><strong>{node.name}</strong><small>{node.category}</small></span>{node.cost > 0 && <em>${node.cost}</em>}</button>)}
+        {nodes.length === 0 && <div className="map-note"><span>{mode === "Project Map" ? (projectName || "No project").toUpperCase() : "ENTIRE STACK"}</span><strong>No tools mapped yet</strong><small>{mode === "Project Map" ? "Assign apps to this project from My Stack." : "Add apps to your library to see them here."}</small></div>}
+        {nodes.length > 0 && <div className="map-note"><span>{mode === "Project Map" ? projectName.toUpperCase() : "ENTIRE STACK"} · LIVE</span><strong>Drag tools to rearrange</strong><small>Double-click (or press Enter on) a tool for details.</small></div>}
+      </div><div className="zoom-controls"><button aria-label="Zoom in" onClick={() => setZoom(Math.min(1.2, zoom + .1))}>＋</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom out" onClick={() => setZoom(Math.max(.6, zoom - .1))}>−</button><button aria-label="Reset zoom" onClick={() => setZoom(1)}>⌖</button></div><div className="map-legend"><span><i className="legend-active" />Active</span><span><i className="legend-edge" />Category flow</span></div>
     </div>
   </div>;
 }
