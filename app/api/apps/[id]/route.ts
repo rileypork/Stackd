@@ -24,6 +24,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
   const email = userEmail(request);
   if (!email) return unauthorized();
   const { id } = await context.params;
-  await getD1().prepare("DELETE FROM user_apps WHERE id = ? AND user_email = ?").bind(id, email).run();
+  const result = await getD1().prepare("DELETE FROM user_apps WHERE id = ? AND user_email = ?").bind(id, email).run();
+  if ((result.meta.changes ?? 0) === 0) return Response.json({ error: "App not found." }, { status: 404 });
   return Response.json({ deleted: true });
 }

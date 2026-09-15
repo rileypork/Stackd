@@ -38,30 +38,53 @@ export function isUniqueViolation(error: unknown) {
 
 export type IngestOutcome = { subscriptionId: string; created: boolean; duplicate: boolean };
 
-/** Upsert the subscription for a parsed signal and record the signal. Stores structured fields only. */
-export async function applySignal(email: string, signal: ParsedSignal): Promise<IngestOutcome> {
-  const db = getD1();
-  const existing = await db
+const CREATE_ATTEMPTS = 3;
+
+/**
+ * Find or create the per-user subscription row for a service. Creation is guarded by the
+ * (user_email, service_name) unique index: a concurrent insert loses the race, sees the
+ * UNIQUE violation and re-reads the winner's row instead of failing the ingest.
+ */
+async function resolveSubscription(db: D1Database, email: string, signal: ParsedSignal): Promise<{ id: string; created: boolean }> {
+  const find = () => db
     .prepare("SELECT id FROM subscriptions WHERE user_email = ? AND service_name = ? COLLATE NOCASE")
     .bind(email, signal.serviceName).first<{ id: string }>();
 
-  let subscriptionId = existing?.id ?? null;
-  let created = false;
-  if (!subscriptionId) {
-    subscriptionId = crypto.randomUUID();
-    created = true;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
+    const existing = await find();
+    if (existing) return { id: existing.id, created: false };
+
+    const id = crypto.randomUUID();
     const linkedApp = await db
       .prepare("SELECT id FROM user_apps WHERE user_email = ? AND (name = ? COLLATE NOCASE OR (? IS NOT NULL AND website LIKE ?)) LIMIT 1")
       .bind(email, signal.serviceName, signal.senderDomain, signal.senderDomain ? `%${signal.senderDomain}%` : null)
       .first<{ id: string }>();
-    await db.prepare(`INSERT INTO subscriptions (id, user_email, service_name, domain, category, plan_name, cost_cents, currency, billing_interval,
-        next_renewal_date, trial_end_date, cancel_url, status, app_id, last_detected_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
-      .bind(subscriptionId, email, signal.serviceName, signal.senderDomain, signal.category, signal.planName,
-        signal.amountCents ?? 0, signal.currency ?? "USD", signal.billingInterval ?? "monthly",
-        signal.renewalDate, signal.trialEndDate, signal.cancelUrl, statusAfterSignal(signal.kind) ?? "active", linkedApp?.id ?? null)
-      .run();
+    try {
+      const insert = await db.prepare(`INSERT INTO subscriptions (id, user_email, service_name, domain, category, plan_name, cost_cents, currency, billing_interval,
+          next_renewal_date, trial_end_date, cancel_url, status, app_id, last_detected_at)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+        WHERE NOT EXISTS (SELECT 1 FROM subscriptions WHERE user_email = ? AND service_name = ? COLLATE NOCASE)`)
+        .bind(id, email, signal.serviceName, signal.senderDomain, signal.category, signal.planName,
+          signal.amountCents ?? 0, signal.currency ?? "USD", signal.billingInterval ?? "monthly",
+          signal.renewalDate, signal.trialEndDate, signal.cancelUrl, statusAfterSignal(signal.kind) ?? "active", linkedApp?.id ?? null,
+          email, signal.serviceName)
+        .run();
+      if ((insert.meta.changes ?? 0) > 0) return { id, created: true };
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      lastError = error;
+    }
   }
+  const existing = await find();
+  if (existing) return { id: existing.id, created: false };
+  throw lastError instanceof Error ? lastError : new Error("Could not resolve subscription after concurrent ingest");
+}
+
+/** Upsert the subscription for a parsed signal and record the signal. Stores structured fields only. */
+export async function applySignal(email: string, signal: ParsedSignal): Promise<IngestOutcome> {
+  const db = getD1();
+  const { id: subscriptionId, created } = await resolveSubscription(db, email, signal);
 
   const signalInsert = await db.prepare(`INSERT OR IGNORE INTO subscription_signals (id, user_email, subscription_id, kind, source, message_hash, sender_domain, subject,
       amount_cents, currency, billing_interval, renewal_date, trial_end_date, cancel_url, confidence)
