@@ -28,13 +28,6 @@ export function isStatus(value: unknown): value is Status {
   return (STATUSES as readonly string[]).includes(String(value));
 }
 
-export function userEmailFromRequest(request: Request): string | null {
-  const email = request.headers.get("oai-authenticated-user-email")?.trim().toLowerCase();
-  if (email) return email;
-  const host = new URL(request.url).hostname;
-  return host === "localhost" || host === "127.0.0.1" ? "local@stackd.dev" : null;
-}
-
 export function cleanPayload(payload: AppPayload) {
   const name = String(payload.name ?? "").trim().slice(0, 120);
   if (!name) throw new Error("App name is required.");

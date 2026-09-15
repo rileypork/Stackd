@@ -1,13 +1,19 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import {
+  LOCAL_DEV_EMAIL,
+  emailFromSitesHeader,
+  isLocalHost,
+  workerFallbackEmail,
+} from "./identity";
 
 export type ChatGPTUser = {
   displayName: string;
   email: string;
   fullName: string | null;
+  source: "chatgpt" | "localhost" | "worker";
 };
 
-const USER_EMAIL_HEADER = "oai-authenticated-user-email";
 const USER_FULL_NAME_HEADER = "oai-authenticated-user-full-name";
 const USER_FULL_NAME_ENCODING_HEADER =
   "oai-authenticated-user-full-name-encoding";
@@ -18,20 +24,44 @@ const CALLBACK_PATH = "/callback";
 
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   const requestHeaders = await headers();
-  const email = requestHeaders.get(USER_EMAIL_HEADER);
-  if (!email) return null;
+  const email = emailFromSitesHeader(requestHeaders);
+  if (email) {
+    const encodedFullName = requestHeaders.get(USER_FULL_NAME_HEADER);
+    const fullName =
+      encodedFullName &&
+      requestHeaders.get(USER_FULL_NAME_ENCODING_HEADER) === PERCENT_ENCODED_UTF8
+        ? safeDecodeURIComponent(encodedFullName)
+        : null;
 
-  const encodedFullName = requestHeaders.get(USER_FULL_NAME_HEADER);
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get(USER_FULL_NAME_ENCODING_HEADER) === PERCENT_ENCODED_UTF8
-      ? safeDecodeURIComponent(encodedFullName)
-      : null;
+    return {
+      displayName: fullName ?? email,
+      email,
+      fullName,
+      source: "chatgpt",
+    };
+  }
+
+  const host =
+    requestHeaders.get("x-forwarded-host") ??
+    requestHeaders.get("host") ??
+    "";
+  if (isLocalHost(host)) {
+    return {
+      displayName: "Local developer",
+      email: LOCAL_DEV_EMAIL,
+      fullName: null,
+      source: "localhost",
+    };
+  }
+
+  const fallback = workerFallbackEmail();
+  if (!fallback) return null;
 
   return {
-    displayName: fullName ?? email,
-    email,
-    fullName,
+    displayName: fallback,
+    email: fallback,
+    fullName: null,
+    source: "worker",
   };
 }
 
