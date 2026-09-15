@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanPayload, rowToApp, userEmailFromRequest } from "../app/api/apps/payload.ts";
+import { cleanPayload, rowToApp } from "../app/api/apps/payload.ts";
+import { userEmailFromRequest } from "../app/identity.ts";
+import { env } from "./harness/cloudflare-workers.ts";
 
 test("cleanPayload requires a name and normalizes fields", () => {
   assert.throws(() => cleanPayload({ name: "   " }), /App name is required/);
@@ -50,12 +52,27 @@ test("rowToApp maps DB rows back to UI shape and tolerates bad JSON", () => {
   assert.equal(app.website, undefined);
 });
 
-test("userEmailFromRequest uses the ChatGPT header, falls back only on localhost", () => {
-  const signedIn = new Request("https://stackd.example/api/apps", {
-    headers: { "oai-authenticated-user-email": "  Riley@Example.com " },
-  });
-  assert.equal(userEmailFromRequest(signedIn), "riley@example.com");
+test("userEmailFromRequest prefers ChatGPT headers, then localhost, then the Workers fallback", () => {
+  const previous = env.STACKD_DEV_USER_EMAIL;
+  try {
+    env.STACKD_DEV_USER_EMAIL = "";
 
-  assert.equal(userEmailFromRequest(new Request("http://localhost:3000/api/apps")), "local@stackd.dev");
-  assert.equal(userEmailFromRequest(new Request("https://stackd.example/api/apps")), null);
+    const signedIn = new Request("https://stackd.example/api/apps", {
+      headers: { "oai-authenticated-user-email": "  Riley@Example.com " },
+    });
+    assert.equal(userEmailFromRequest(signedIn), "riley@example.com");
+
+    env.STACKD_DEV_USER_EMAIL = "other@example.com";
+    assert.equal(userEmailFromRequest(signedIn), "riley@example.com");
+    assert.equal(userEmailFromRequest(new Request("http://localhost:3000/api/apps")), "local@stackd.dev");
+    assert.equal(userEmailFromRequest(new Request("https://stackd.example/api/apps")), "other@example.com");
+
+    env.STACKD_DEV_USER_EMAIL = "";
+    assert.equal(userEmailFromRequest(new Request("https://stackd.example/api/apps")), null);
+
+    delete env.STACKD_DEV_USER_EMAIL;
+    assert.equal(userEmailFromRequest(new Request("https://stackd.example/api/apps")), "rileyporcarello@gmail.com");
+  } finally {
+    env.STACKD_DEV_USER_EMAIL = previous;
+  }
 });

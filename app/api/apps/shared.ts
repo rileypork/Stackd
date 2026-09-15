@@ -1,7 +1,8 @@
 import { getD1 } from "../../../db";
 
 export type { AppPayload, Status } from "./payload";
-export { STATUSES, isStatus, cleanPayload, rowToApp, userEmailFromRequest as userEmail } from "./payload";
+export { STATUSES, isStatus, cleanPayload, rowToApp } from "./payload";
+export { userEmailFromRequest as userEmail } from "../../identity";
 import { cleanPayload, rowToApp, type AppPayload } from "./payload";
 
 export function unauthorized() {

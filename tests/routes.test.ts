@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db } from "./harness/cloudflare-workers.ts";
+import { db, env } from "./harness/cloudflare-workers.ts";
 import * as subscriptionsRoute from "../app/api/subscriptions/route.ts";
 import * as subscriptionRoute from "../app/api/subscriptions/[id]/route.ts";
 import * as ingestRoute from "../app/api/gmail/ingest/route.ts";
@@ -84,6 +84,19 @@ test("unauthenticated requests are rejected on projects and apps routes", async 
 test("a blank auth header does not fall through to the local dev identity on a production host", async () => {
   const response = await subscriptionsRoute.GET(request("/api/subscriptions", { headers: { "oai-authenticated-user-email": "   " } }));
   assert.equal(response.status, 401);
+});
+
+test("STACKD_DEV_USER_EMAIL is used when ChatGPT headers are absent", async () => {
+  const previous = env.STACKD_DEV_USER_EMAIL;
+  env.STACKD_DEV_USER_EMAIL = "rileyporcarello@gmail.com";
+  try {
+    const created = await appsRoute.POST(request("/api/apps", { method: "POST", json: { name: "Cursor", status: "Active" } }));
+    assert.equal(created.status, 201);
+    const listed = await json<{ apps: { name: string }[] }>(await appsRoute.GET(request("/api/apps")));
+    assert.deepEqual(listed.apps.map((app) => app.name), ["Cursor"]);
+  } finally {
+    env.STACKD_DEV_USER_EMAIL = previous;
+  }
 });
 
 test("the auth header is normalised and scopes reads to the caller", async () => {

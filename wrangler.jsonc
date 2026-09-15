@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "stackd",
+  "account_id": "a92148bfe63559febe0950140ce8487e",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "./worker/index.ts",
+  "workers_dev": true,
+  "preview_urls": true,
+  // vinext 0.0.50 expects ASSETS + IMAGES. The Cloudflare Vite plugin fills in
+  // the built client asset directory on `vinext build` / `wrangler deploy`.
+  "assets": {
+    "directory": "dist/client",
+    "not_found_handling": "none",
+    "binding": "ASSETS"
+  },
+  "images": {
+    "binding": "IMAGES"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "stackd",
+      "database_id": "a4d78b4f-b5e9-4126-9a84-48b284825ace"
+      // Remote D1 already has drizzle 0000, 0001, and 0002_organic_caretaker.
+      // Do not set migrations_dir: wrangler tracks a different table than
+      // drizzle and would try to re-apply those files.
+    }
+  ],
+  "vars": {
+    // Used when ChatGPT Sites headers are absent (Cloudflare Workers).
+    // Override with `wrangler secret put STACKD_DEV_USER_EMAIL`, or set to ""
+    // to disable the fallback and require oai-authenticated-user-* headers.
+    "STACKD_DEV_USER_EMAIL": "rileyporcarello@gmail.com"
+  }
+}
